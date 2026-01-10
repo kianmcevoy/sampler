@@ -1,0 +1,4 @@
+#ifndef INSTRUMENT_CONSTANTS_H
+#define INSTRUMENT_CONSTANTS_H
+
+#endif

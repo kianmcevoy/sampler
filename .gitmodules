@@ -1,0 +1,6 @@
+[submodule "idsp"]
+	path = idsp
+	url = https://github.com/InstruoModular/idsp.git
+[submodule "system"]
+	path = system
+	url = https://github.com/InstruoModular/JUCE-Prototyper-system.git
