@@ -260,11 +260,11 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 
 set(BUILD_RELEASE_PACKAGES 0)
-if (${CMAKE_BUILD_TYPE} STREQUAL "Release")
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
     set(BUILD_RELEASE_PACKAGES 1)
 endif()
 
-if (${BUILD_RELEASE_PACKAGES})
+if (BUILD_RELEASE_PACKAGES)
     message(STATUS "Configuring release packages")
 
     set(CODESIGN_IDENTITY "Instruo Limited")

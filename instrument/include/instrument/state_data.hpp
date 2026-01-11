@@ -11,7 +11,7 @@
  */
 struct StateData
 {
-
+	float playback_position { 0.0f }; // Current playback position in samples
 };
 
 #endif

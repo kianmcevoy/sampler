@@ -8,7 +8,12 @@
  */
 struct ParameterData
 {
-
+	float speed;
+	float start;
+	float length;
+	bool play;
+	bool stop;
+	bool loop;
 };
 
 #endif

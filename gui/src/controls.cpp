@@ -64,5 +64,12 @@
  */
 void build_gui_control_scheme(GuiControlBuilder& controls)
 {
-
+	controls.add_trigger("load_sample", "Load Sample");
+	controls.add_trigger("play", "Play");
+	controls.add_trigger("stop", "Stop");
+	controls.add_button("loop", "Loop");
+	
+	controls.add_slider("start", "Start");
+	controls.add_slider("length", "Length");
+	controls.add_slider("speed", "Speed");
 }

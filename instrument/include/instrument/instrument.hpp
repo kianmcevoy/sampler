@@ -24,8 +24,8 @@ class Instrument
         void process(const InstrumentInputData& input, InstrumentOutputData& output);
 
     private:
-        /** Example passthrough DSP block. */
-        Passthrough through;
+		float position; // Current playback position (floating point for smooth interpolation)
+		bool playing;   // Whether sample is currently playing
 };
 
 #endif
