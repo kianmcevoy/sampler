@@ -32,18 +32,11 @@ set(SYSTEM_DIR ${PROJECT_SOURCE_DIR}/system)
 set(INTERFACE_DIR ${PROJECT_SOURCE_DIR}/interface)
 # Background directory
 set(BACKGROUND_DIR ${PROJECT_SOURCE_DIR}/background)
-# IDSP directory
-set(IDSP_DIR ${PROJECT_SOURCE_DIR}/idsp)
-# IGUI directory
-set(IGUI_DIR ${SYSTEM_DIR}/igui)
-
+# ISL directory
+set(ISL_DIR ${PROJECT_SOURCE_DIR}/isl/)
 
 # JUCE framework
 add_subdirectory(${SYSTEM_DIR}/JUCE)
-
-# Libraries
-add_subdirectory(${PROJECT_SOURCE_DIR}/idsp)
-
 
 set_directory_properties(PROPERTIES JUCE_COMPANY_NAME "Instruo")
 set_directory_properties(PROPERTIES JUCE_COMPANY_WEBSITE "https://www.instruomodular.com/")
@@ -96,7 +89,7 @@ file(GLOB TARGET_SRCS
     ${INSTRUMENT_DIR}/src/*.cpp
     ${GUI_DIR}/src/*.cpp
     ${INTERFACE_DIR}/src/*.cpp
-    ${IGUI_DIR}/src/*.cpp
+    ${ISL_DIR}/src/igui/*.cpp
 )
 target_sources(${TARGET_NAME} PRIVATE ${TARGET_SRCS})
 
@@ -108,8 +101,7 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${GUI_DIR}/include
     ${INTERFACE_DIR}/include
     ${BACKGROUND_DIR}/include
-    ${IDSP_DIR}/include
-    ${IGUI_DIR}/include
+    ${ISL_DIR}/include
 )
 
 target_compile_definitions(${TARGET_NAME}
@@ -228,6 +220,7 @@ target_link_libraries(${TARGET_NAME}
     PRIVATE
         juce::juce_audio_utils
         juce::juce_osc
+        juce::juce_animation
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags

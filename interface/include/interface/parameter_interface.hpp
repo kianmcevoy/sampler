@@ -27,6 +27,9 @@ class ParameterInterface
          * includes UI features, such as button combinations.
          */
         void process(const ParameterInterfaceInputData& input, ParameterInterfaceOutputData& output);
+
+    private:
+        bool load_sample_into_buffer(const juce::File& audio_file, ParameterInterfaceOutputData& output, float start_slider, float length_slider);
 };
 
 #endif

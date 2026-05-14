@@ -1,6 +1,9 @@
 #ifndef INSTRUMENT_STATE_DATA_H
 #define INSTRUMENT_STATE_DATA_H
 
+#include <array>
+#include <cstddef>
+
 /** Structure of output/state data for the instrument.
  * Use this to communicate the state of the instrument to the output, i.e. the
  * display processor.
@@ -11,7 +14,15 @@
  */
 struct StateData
 {
-	float playback_position { 0.0f }; // Current playback position in samples
+	// Must match GuiOutputData::max_playheads (checked via static_assert in
+	// state_interface.cpp).
+	static constexpr size_t max_playheads = 16;
+
+	float playback_position { 0.0f }; // Position of the primary (first) active playhead, or -1 if none.
+
+	std::array<bool,  max_playheads> playhead_active   {};
+	std::array<float, max_playheads> playhead_position {};
+	std::array<float, max_playheads> playhead_volume   {};
 };
 
 #endif

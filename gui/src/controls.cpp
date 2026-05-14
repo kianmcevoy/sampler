@@ -68,8 +68,33 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_trigger("play", "Play");
 	controls.add_trigger("stop", "Stop");
 	controls.add_button("loop", "Loop");
-	
-	controls.add_slider("start", "Start");
-	controls.add_slider("length", "Length");
-	controls.add_slider("speed", "Speed");
+	controls.add_trigger("trigger", "Trigger");
+
+	// Playback: start/length are fractions of the loaded sample [0, 1].
+	// speed is bipolar [-4, +4]; default 0 (midpoint).
+	controls.add_slider("start",  "Start",   0.f,  1.f, 0.f);
+	controls.add_slider("length", "Length",  0.f,  1.f, 1.f);
+	controls.add_slider("speed",  "Speed",  -4.f,  4.f, 0.f);
+	controls.add_slider("level",  "Level",   0.f,  1.f, 1.f);
+	controls.add_slider("pan",    "Pan",     0.f,  1.f, 0.5f);
+
+	// Per-launch random deviation (fraction of each parameter's range).
+	controls.add_slider("random_speed",  "Random Speed",  0.f, 1.f, 0.f);
+	controls.add_slider("random_start",  "Random Start",  0.f, 1.f, 0.f);
+	controls.add_slider("random_length", "Random Length", 0.f, 1.f, 0.f);
+	controls.add_slider("random_level",  "Random Level",  0.f, 1.f, 0.f);
+	controls.add_slider("random_pan",    "Random Pan",    0.f, 1.f, 0.f);
+
+	// Envelope: time/spacing are fractions [0, 1]. skew bipolar around 0.5
+	// (0=decay, 0.5=triangle, 1=ramp). spacing bipolar around 0.5
+	// (<0.5=overlap, =0.5=no gap, >0.5=gap).
+	// repeats displays 1..17; values 1..16 = count, the very top of the
+	// slider engages Looping.
+	controls.add_slider("time",    "Time",    0.f,  1.f, 1.f);
+	controls.add_slider("skew",    "Skew",    0.f,  1.f, 0.5f);
+	controls.add_slider("shape",   "Shape",   0.f,  1.f, 0.f);
+	controls.add_slider("repeats", "Repeats", 1.f, 17.f, 1.f);
+	controls.add_slider("spacing", "Spacing", 0.f,  1.f, 0.5f);
+
+
 }
