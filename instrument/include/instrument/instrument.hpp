@@ -5,6 +5,7 @@
 #include "instrument/envelope.hpp"
 #include "instrument/state_data.hpp"
 #include "system/instrument_data.hpp"
+#include "instrument/constants.hpp"
 
 #include <array>
 #include <cstddef>
@@ -52,8 +53,6 @@ class Instrument
             idsp::Envelope envelope;
             bool envelope_enabled;
         };
-
-        static constexpr size_t max_playheads = StateData::max_playheads;
 
         bool check_bounds(Playhead& ph, bool looping);
 

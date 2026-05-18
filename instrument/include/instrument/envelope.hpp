@@ -13,9 +13,9 @@ namespace idsp
  * starts at peak (decay-only); release=0 stops at peak.
  *
  * `shape` ∈ [0, 1] morphs the curve:
- *   0.0  — linear (sharp corner at peak; clicky on short times)
- *   0.5  — RC-style exponential (concave-down attack, concave-up release)
- *   1.0  — cubic smoothstep (zero slope at both endpoints — click-free)
+ *   0.0  — exponential (RC-style: fast rise / fast initial fall, slow tail)
+ *   0.5  — linear (sharp corner at peak; clicky on short times)
+ *   1.0  — logarithmic (slow start, fast end — soft swell / late fall-off)
  *
  * The class is unaware of gates or retriggering — call trigger() to (re)start.
  * Lives in the project for now under namespace idsp so the eventual promotion
@@ -111,45 +111,44 @@ class Envelope
         enum class Stage { Idle, Attack, Release };
 
         // Crossfades three anchor curves of t ∈ [0,1]:
-        //   shape=0  : linear      (lin)
-        //   shape=0.5: exp / RC    (concave-down attack, concave-up release)
-        //   shape=1  : cubic smoothstep — perceptual stand-in for a raised
-        //              cosine. Zero slope at both endpoints, ~0.018 max
-        //              deviation from 0.5*(1-cos(πt)); inaudible for envelope
-        //              use and 3 ops instead of a cos() call or LUT lookup.
+        //   shape=0  : exponential (RC-style — concave-down attack, concave-up release)
+        //   shape=0.5: linear
+        //   shape=1  : logarithmic (concave-up attack, concave-down release)
+        // The exp/log anchors are quadratic approximations: t^2 and 1-(1-t)^2.
+        // These are mirror images about y=x, so the morph is symmetric around
+        // the linear midpoint.
         static inline Sample shape_attack(Sample t, float shape)
         {
             const Sample one_minus_t = Sample(1) - t;
+            const Sample expc = Sample(1) - one_minus_t * one_minus_t;  // 1-(1-t)^2  (concave down)
             const Sample lin  = t;
-            const Sample expc = Sample(1) - one_minus_t * one_minus_t;  // 1-(1-t)^2
-            const Sample smth = t * t * (Sample(3) - Sample(2) * t);    // t^2(3-2t)
+            const Sample logc = t * t;                                  // t^2        (concave up)
 
             if (shape < 0.5f)
             {
                 const Sample w = Sample(2) * shape;
-                return (Sample(1) - w) * lin + w * expc;
+                return (Sample(1) - w) * expc + w * lin;
             }
             const Sample w = Sample(2) * (shape - Sample(0.5));
-            return (Sample(1) - w) * expc + w * smth;
+            return (Sample(1) - w) * lin + w * logc;
         }
 
         // Release: t ∈ [0,1], value goes 1→0. Mirror of attack about y=0.5 so
-        // shape=0.5 gives the natural exponential decay (steep start, slow
-        // tail), not the inverse.
+        // shape=0 gives the natural exponential decay (steep start, slow tail).
         static inline Sample shape_release(Sample t, float shape)
         {
             const Sample one_minus_t = Sample(1) - t;
+            const Sample expc = one_minus_t * one_minus_t;              // (1-t)^2    (concave up)
             const Sample lin  = one_minus_t;
-            const Sample expc = one_minus_t * one_minus_t;                     // (1-t)^2
-            const Sample smth = Sample(1) - t * t * (Sample(3) - Sample(2) * t); // 1 - t^2(3-2t)
+            const Sample logc = Sample(1) - t * t;                      // 1 - t^2    (concave down)
 
             if (shape < 0.5f)
             {
                 const Sample w = Sample(2) * shape;
-                return (Sample(1) - w) * lin + w * expc;
+                return (Sample(1) - w) * expc + w * lin;
             }
             const Sample w = Sample(2) * (shape - Sample(0.5));
-            return (Sample(1) - w) * expc + w * smth;
+            return (Sample(1) - w) * lin + w * logc;
         }
 
         Stage  stage{Stage::Idle};

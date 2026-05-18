@@ -41,11 +41,11 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 	output.parameter.spacing = input.controls.sliders.at("spacing");
 	output.parameter.trigger = input.controls.triggers.at("trigger");
 
-	// repeats slider is displayed 1..17; values 1..16 are the count and the
+	// repeats slider is displayed 1..max_playheads; values 1..max_playheads are the count and the
 	// very top of the slider engages looping.
 	const float repeats_raw = input.controls.sliders.at("repeats");
-	output.parameter.repeats = idsp::clamp<size_t>(static_cast<size_t>(repeats_raw), 1, 16);
-	output.parameter.loop_envelope = (repeats_raw >= 16.5f);
+	output.parameter.repeats = idsp::clamp<size_t>(static_cast<size_t>(repeats_raw), 1, max_playheads);
+	output.parameter.loop_envelope = (repeats_raw >= 8.5f);
 
 	output.parameter.random_speed = input.controls.sliders.at("random_speed");
 	output.parameter.random_start = input.controls.sliders.at("random_start");

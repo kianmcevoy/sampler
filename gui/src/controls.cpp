@@ -93,7 +93,7 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_slider("time",    "Time",    0.f,  1.f, 1.f);
 	controls.add_slider("skew",    "Skew",    0.f,  1.f, 0.5f);
 	controls.add_slider("shape",   "Shape",   0.f,  1.f, 0.f);
-	controls.add_slider("repeats", "Repeats", 1.f, 17.f, 1.f);
+	controls.add_slider("repeats", "Repeats", 1.f, 9.f, 1.f);
 	controls.add_slider("spacing", "Spacing", 0.f,  1.f, 0.5f);
 
 

@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstddef>
+#include "instrument/constants.hpp"
 
 /** Structure of output/state data for the instrument.
  * Use this to communicate the state of the instrument to the output, i.e. the
@@ -14,10 +15,6 @@
  */
 struct StateData
 {
-	// Must match GuiOutputData::max_playheads (checked via static_assert in
-	// state_interface.cpp).
-	static constexpr size_t max_playheads = 16;
-
 	float playback_position { 0.0f }; // Position of the primary (first) active playhead, or -1 if none.
 
 	std::array<bool,  max_playheads> playhead_active   {};
