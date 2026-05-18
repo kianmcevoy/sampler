@@ -14,10 +14,10 @@ void StateInterface::load(const StateInterfaceLoadData& loaded, StateInterfaceOu
 
 void StateInterface::process(const StateInterfaceInputData& input, StateInterfaceOutputData& output)
 {
-	for (size_t i = 0; i < max_playheads; ++i)
+	for (size_t i = 0; i < max_voices; ++i)
 	{
-		output.gui.playhead_active[i].store(input.state.playhead_active[i]);
-		output.gui.playhead_position[i].store(input.state.playhead_position[i]);
-		output.gui.playhead_volume[i].store(input.state.playhead_volume[i]);
+		output.gui.voice_active[i].store(input.state.voice_active[i]);
+		output.gui.voice_position[i].store(input.state.voice_position[i]);
+		output.gui.voice_volume[i].store(input.state.voice_volume[i]);
 	}
 }

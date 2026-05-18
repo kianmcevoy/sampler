@@ -68,7 +68,6 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_trigger("play", "Play");
 	controls.add_trigger("stop", "Stop");
 	controls.add_button("loop", "Loop");
-	controls.add_trigger("trigger", "Trigger");
 
 	// Playback: start/length are fractions of the loaded sample [0, 1].
 	// speed is bipolar [-4, +4]; default 0 (midpoint).
@@ -85,16 +84,21 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_slider("random_level",  "Random Level",  0.f, 1.f, 0.f);
 	controls.add_slider("random_pan",    "Random Pan",    0.f, 1.f, 0.f);
 
-	// Envelope: time/spacing are fractions [0, 1]. skew bipolar around 0.5
-	// (0=decay, 0.5=triangle, 1=ramp). spacing bipolar around 0.5
-	// (<0.5=overlap, =0.5=no gap, >0.5=gap).
-	// repeats displays 1..17; values 1..16 = count, the very top of the
-	// slider engages Looping.
+    // Envelope routing depths: bipolar [-1, +1], default 0 = no modulation.
+    controls.add_slider("envelope_speed",  "Envelope Speed",  -1.f, 1.f, 0.f);
+	controls.add_slider("envelope_start",  "Envelope Start",  -1.f, 1.f, 0.f);
+	controls.add_slider("envelope_length", "Envelope Length", -1.f, 1.f, 0.f);
+	controls.add_slider("envelope_level",  "Envelope Level",  -1.f, 1.f, 0.f);
+	controls.add_slider("envelope_pan",    "Envelope Pan",    -1.f, 1.f, 0.f);
+
+	// Envelope: time is a fraction [0, 1]. skew bipolar around 0.5
+	// (0=decay, 0.5=triangle, 1=ramp).
 	controls.add_slider("time",    "Time",    0.f,  1.f, 1.f);
 	controls.add_slider("skew",    "Skew",    0.f,  1.f, 0.5f);
 	controls.add_slider("shape",   "Shape",   0.f,  1.f, 0.f);
-	controls.add_slider("repeats", "Repeats", 1.f, 9.f, 1.f);
-	controls.add_slider("spacing", "Spacing", 0.f,  1.f, 0.5f);
+	controls.add_button("loop_envelope", "Loop Envelope");
+    controls.add_button("voice_stealing", "Steal/Protect");
+    controls.add_button("envelope_sync", "Sync Envelope");
 
 
 }

@@ -27,13 +27,12 @@ struct ParameterData
 	bool loop;
 
 	//envelope controls
-	bool trigger;
 	float time;
 	float skew;
-	float spacing;
 	float shape;
-	size_t repeats;
 	bool loop_envelope;
+    bool voice_stealing;
+    bool envelope_sync;
 
 	//random modulation
 	float random_speed;
@@ -41,6 +40,13 @@ struct ParameterData
 	float random_length;
 	float random_level;
 	float random_pan;
+
+    //envelope modulation
+	float envelope_speed;
+	float envelope_start;
+	float envelope_length;
+	float envelope_level;
+	float envelope_pan;
 };
 
 #endif

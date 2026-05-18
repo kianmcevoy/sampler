@@ -15,11 +15,11 @@
  */
 struct StateData
 {
-	float playback_position { 0.0f }; // Position of the primary (first) active playhead, or -1 if none.
+	float playback_position { 0.0f }; // Position of the primary (first) active voice, or -1 if none.
 
-	std::array<bool,  max_playheads> playhead_active   {};
-	std::array<float, max_playheads> playhead_position {};
-	std::array<float, max_playheads> playhead_volume   {};
+	std::array<bool,  max_voices> voice_active   {};
+	std::array<float, max_voices> voice_position {};
+	std::array<float, max_voices> voice_volume   {};
 };
 
 #endif

@@ -12,11 +12,11 @@ struct GuiOutputData
 	std::atomic<int> start { 0 };
 	std::atomic<int> end { 69 };
 
-	// Playhead display data (positions and volumes for active playheads)
+	// Per-voice display data (cursor positions and envelope levels).
 
-	std::array<std::atomic<bool>, max_playheads> playhead_active;
-	std::array<std::atomic<float>, max_playheads> playhead_position;
-	std::array<std::atomic<float>, max_playheads> playhead_volume;
+	std::array<std::atomic<bool>, max_voices>  voice_active;
+	std::array<std::atomic<float>, max_voices> voice_position;
+	std::array<std::atomic<float>, max_voices> voice_volume;
 
 	// File chooser request (set by parameter interface, consumed by GUI)
 	std::atomic<bool> request_file_chooser { false };

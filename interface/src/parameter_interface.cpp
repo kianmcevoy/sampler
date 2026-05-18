@@ -38,20 +38,22 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 	output.parameter.time    = input.controls.sliders.at("time");
 	output.parameter.skew    = input.controls.sliders.at("skew");
 	output.parameter.shape   = input.controls.sliders.at("shape");
-	output.parameter.spacing = input.controls.sliders.at("spacing");
-	output.parameter.trigger = input.controls.triggers.at("trigger");
 
-	// repeats slider is displayed 1..max_playheads; values 1..max_playheads are the count and the
-	// very top of the slider engages looping.
-	const float repeats_raw = input.controls.sliders.at("repeats");
-	output.parameter.repeats = idsp::clamp<size_t>(static_cast<size_t>(repeats_raw), 1, max_playheads);
-	output.parameter.loop_envelope = (repeats_raw >= 8.5f);
+	output.parameter.loop_envelope =input.controls.buttons.at("loop_envelope");
+	output.parameter.voice_stealing = input.controls.buttons.at("voice_stealing");
+	output.parameter.envelope_sync = input.controls.buttons.at("envelope_sync");
 
 	output.parameter.random_speed = input.controls.sliders.at("random_speed");
 	output.parameter.random_start = input.controls.sliders.at("random_start");
 	output.parameter.random_length = input.controls.sliders.at("random_length");
 	output.parameter.random_level = input.controls.sliders.at("random_level");
 	output.parameter.random_pan = input.controls.sliders.at("random_pan");
+
+    output.parameter.envelope_speed = input.controls.sliders.at("envelope_speed");
+    output.parameter.envelope_start = input.controls.sliders.at("envelope_start");
+    output.parameter.envelope_length = input.controls.sliders.at("envelope_length");
+    output.parameter.envelope_level = input.controls.sliders.at("envelope_level");
+    output.parameter.envelope_pan = input.controls.sliders.at("envelope_pan");
 
 	if (output.gui.waveform_ready.load() && !output.gui.waveform_left.empty())
 	{
