@@ -22,8 +22,14 @@ void VoicePool::kill_oldest()
     if (oldest) oldest->kill();
 }
 
-Voice* VoiceAllocator::acquire(VoicePool& pool, bool voice_stealing)
+Voice* VoiceAllocator::acquire(VoicePool& pool, bool voice_stealing, int preferred_slot)
 {
+    // GUI voice-select override: caller asked for a specific slot. Honour it
+    // unconditionally — if it's already playing, this re-triggers (steals
+    // itself).
+    if (preferred_slot >= 0 && static_cast<size_t>(preferred_slot) < pool.size())
+        return &pool[static_cast<size_t>(preferred_slot)];
+
     // First inactive slot wins.
     for (auto& v : pool)
         if (!v.is_active()) return &v;

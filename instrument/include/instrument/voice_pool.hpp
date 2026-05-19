@@ -38,15 +38,18 @@ private:
 /** Voice allocation policy.
  *
  * acquire():
- *   - first inactive slot wins; else
- *   - if voice_stealing is true → return the slot with the smallest
- *     launch_seq (the oldest active voice); else
- *   - return nullptr (caller silently drops the launch).
+ *   - if `preferred_slot` is in [0, max_voices) it is returned unconditionally
+ *     (retriggers/steals that slot if currently active) — used by the GUI
+ *     voice-select feature to force a specific slot;
+ *   - else first inactive slot wins;
+ *   - else if voice_stealing is true → return the slot with the smallest
+ *     launch_seq (the oldest active voice);
+ *   - else → return nullptr (caller silently drops the launch).
  */
 class VoiceAllocator
 {
 public:
-    Voice* acquire(VoicePool& pool, bool voice_stealing);
+    Voice* acquire(VoicePool& pool, bool voice_stealing, int preferred_slot = -1);
 };
 
 #endif

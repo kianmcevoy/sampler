@@ -55,6 +55,11 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
     output.parameter.envelope_level = input.controls.sliders.at("envelope_level");
     output.parameter.envelope_pan = input.controls.sliders.at("envelope_pan");
 
+    // Selected voice (GUI-thread state). The Instrument uses this both to
+    // route live edits onto a specific voice and to force a `play` into that
+    // slot. -1 means "no selection" — fall back to the normal allocator.
+    output.parameter.selected_voice = input.gui.selected_voice.load();
+
 	if (output.gui.waveform_ready.load() && !output.gui.waveform_left.empty())
 	{
 		const int num_samples = static_cast<int>(output.gui.waveform_left.size());

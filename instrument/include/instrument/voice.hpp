@@ -2,6 +2,7 @@
 #define INSTRUMENT_VOICE_HPP
 
 #include "instrument/envelope.hpp"
+#include "instrument/parameter_data.hpp"
 #include "idsp/delay.hpp"
 
 #include <cstddef>
@@ -13,47 +14,32 @@
  * The audio buffer (stereo LagrangeDelay pair) is shared across voices and
  * passed by const reference into process().
  *
- * Parameters fall into two groups:
- *   - **Base** values (start/length/speed/level/pan) are snapshotted at
- *     trigger() and frozen for the voice's lifetime. Slider changes during
- *     playback do not disturb in-flight voices.
- *   - **Envelope routing depths** are also snapshotted and applied per-sample
- *     inside process(); each destination has a depth in [-1, +1].
- *
- * Direction of playback is locked at trigger: env-speed modulation changes
- * magnitude only, never sign.
+ * Parameter model:
+ *   - Direction (`forward_`) is the only field truly frozen at trigger —
+ *     env-speed modulation can change magnitude but never sign.
+ *   - All other base parameters are kept up-to-date via `set_live_params`,
+ *     which the Instrument calls each block from the per-voice live-param
+ *     slot (so edits to the currently-selected voice take effect immediately).
+ *   - Envelope durations (attack/release/shape) are recomputed by
+ *     `set_live_params`, but the currently-running envelope phase keeps its
+ *     original counters — new envelope durations apply at the next retrigger
+ *     boundary (i.e. on a loop or a fresh `trigger()`).
  */
 class Voice
 {
 public:
-    struct TriggerParams
-    {
-        size_t start_pos;
-        size_t end_pos;
-        size_t length;
-        float  base_speed;
-        float  base_level;
-        float  base_pan;
-        bool   sample_loops;
-
-        // Envelope (durations pre-resolved by caller per sync mode)
-        size_t env_attack;
-        size_t env_release;
-        float  env_shape;
-        bool   env_loops;
-        bool   env_sync;
-
-        // Per-destination depths in [-1, +1]
-        float  depth_speed;
-        float  depth_start;
-        float  depth_length;
-        float  depth_level;
-        float  depth_pan;
-    };
-
     struct StereoFrame { float l; float r; };
 
-    void  trigger(const TriggerParams& p, uint64_t seq);
+    /** Begin playback. `p` carries the post-random *effective* live params for
+     * this launch; `buffer_size`/`sample_rate` are needed to resolve
+     * fractional start/length/time into sample counts. Direction is locked
+     * from the sign of `p.speed`. */
+    void  trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
+
+    /** Apply a fresh live-param snapshot without retriggering. Position,
+     * envelope phase, direction, and active state are preserved. */
+    void  set_live_params(const VoiceLiveParams& p, size_t buffer_size, float sample_rate);
+
     void  kill();
 
     bool     is_active()  const { return active_; }
@@ -68,7 +54,7 @@ private:
     bool check_bounds(float effective_end);
     void retrigger_position();
 
-    // Frozen at trigger
+    // Live-editable base params (re-derived from VoiceLiveParams each block)
     size_t start_pos_{0};
     size_t end_pos_{0};
     size_t length_{0};

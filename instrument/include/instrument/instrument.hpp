@@ -2,11 +2,13 @@
 #define INSTRUMENT_PARENT_H
 
 #include "instrument/dsp.hpp"
+#include "instrument/parameter_data.hpp"
 #include "instrument/state_data.hpp"
 #include "instrument/voice.hpp"
 #include "instrument/voice_pool.hpp"
 #include "system/instrument_data.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -41,6 +43,13 @@ class Instrument
         // xorshift32 state for per-launch random_* jitter. Sampled only on
         // play, not in the audio loop. Lightweight enough for MCU.
         uint32_t        rng_state_{0x12345678u};
+
+        // Per-voice live-editable parameter snapshot. Written at trigger
+        // (with random offsets applied), then either kept frozen or updated
+        // by the GUI when its slot is the currently selected voice. Each
+        // block we push these into the voice via Voice::set_live_params so
+        // edits take effect immediately.
+        std::array<VoiceLiveParams, max_voices> voice_live_params_{};
 };
 
 #endif

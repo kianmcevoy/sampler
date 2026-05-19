@@ -40,31 +40,55 @@ namespace
     }
 }
 
-void Voice::trigger(const TriggerParams& p, uint64_t seq)
+void Voice::set_live_params(const VoiceLiveParams& p, size_t buffer_size, float sample_rate)
 {
-    start_pos_    = p.start_pos;
-    end_pos_      = p.end_pos;
-    length_       = p.length;
-    base_speed_   = p.base_speed;
-    base_level_   = p.base_level;
-    base_pan_     = p.base_pan;
-    compute_pan_gains_lut(p.base_pan, base_pan_l_, base_pan_r_);
-    sample_loops_ = p.sample_loops;
-    forward_      = (p.base_speed >= 0.f);
+    // Start / length / end derive from sliders + current buffer size.
+    const float start_clamped  = idsp::clamp(p.start,  0.f, 1.f);
+    const float length_clamped = idsp::clamp(p.length, 0.f, 1.f);
+    const size_t start_pos = static_cast<size_t>(start_clamped * static_cast<float>(buffer_size));
+    const size_t loop_len  = idsp::max<size_t>(
+        static_cast<size_t>(length_clamped * static_cast<float>(buffer_size)), 1);
+    const size_t end_pos   = idsp::min(start_pos + loop_len, buffer_size);
 
-    env_attack_  = p.env_attack;
-    env_release_ = p.env_release;
-    env_shape_   = p.env_shape;
-    env_loops_   = p.env_loops;
-    env_sync_    = p.env_sync;
+    start_pos_ = start_pos;
+    end_pos_   = end_pos;
+    length_    = loop_len;
 
-    depth_speed_  = p.depth_speed;
-    depth_start_  = p.depth_start;
-    depth_length_ = p.depth_length;
-    depth_level_  = p.depth_level;
-    depth_pan_    = p.depth_pan;
+    // Speed magnitude is editable; direction stays locked to `forward_`.
+    const float mag = (p.speed >= 0.f) ? p.speed : -p.speed;
+    base_speed_ = forward_ ? mag : -mag;
 
-    retrigger_position();
+    base_level_ = p.level;
+    base_pan_   = p.pan;
+    compute_pan_gains_lut(p.pan, base_pan_l_, base_pan_r_);
+    sample_loops_ = p.loop;
+
+    // Envelope durations: sync ON ⇒ fraction of (current) loop length;
+    // sync OFF ⇒ 0..5 s. Recomputed but only applied on the next retrigger
+    // boundary — the running envelope keeps its original attack/release.
+    const size_t env_dur_raw = p.envelope_sync
+        ? static_cast<size_t>(p.time * static_cast<float>(loop_len))
+        : static_cast<size_t>(p.time * 5.0f * sample_rate);
+    const size_t env_dur = (env_dur_raw > 0) ? env_dur_raw : 1;
+
+    env_attack_  = static_cast<size_t>(p.skew * static_cast<float>(env_dur));
+    env_release_ = (env_dur > env_attack_) ? (env_dur - env_attack_) : 0;
+    env_shape_   = p.shape;
+    env_loops_   = p.loop_envelope;
+    env_sync_    = p.envelope_sync;
+
+    depth_speed_  = p.envelope_speed;
+    depth_start_  = p.envelope_start;
+    depth_length_ = p.envelope_length;
+    depth_level_  = p.envelope_level;
+    depth_pan_    = p.envelope_pan;
+}
+
+void Voice::trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
+{
+    forward_ = (p.speed >= 0.f);
+    this->set_live_params(p, buffer_size, sample_rate);
+    this->retrigger_position();
     active_     = (length_ > 0);
     launch_seq_ = seq;
     envelope_.trigger(env_attack_, env_release_, env_shape_);

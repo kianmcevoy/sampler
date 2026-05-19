@@ -21,52 +21,58 @@ namespace
         return static_cast<float>(xorshift32(s) >> 8) * (1.f / 8388608.f) - 1.f;
     }
 
-    Voice::TriggerParams build_trigger_params(const ParameterData& p,
-                                              size_t               buffer_size,
-                                              float                sample_rate,
-                                              uint32_t&            rng_state)
+    // Apply per-launch random_* jitter to the supplied global params and
+    // return the resulting "effective" live params for a new voice.
+    VoiceLiveParams build_effective_live_params(const ParameterData& p, uint32_t& rng_state)
     {
-        // Per-launch random deviation (bipolar offset scaled by random_X slider).
-        // random_speed multiplied by 8 to span the full ±4 speed range.
-        const float jit_start  = idsp::clamp(p.start  + bipolar_rand(rng_state) * p.random_start,  0.f, 1.f);
-        const float jit_length = idsp::clamp(p.length + bipolar_rand(rng_state) * p.random_length, 0.f, 1.f);
-        const float jit_speed  = p.speed + bipolar_rand(rng_state) * p.random_speed * 8.f;
-        const float jit_level  = idsp::clamp(p.level  + bipolar_rand(rng_state) * p.random_level,  0.f, 1.f);
-        const float jit_pan    = idsp::clamp(p.pan    + bipolar_rand(rng_state) * p.random_pan,    0.f, 1.f);
+        VoiceLiveParams out;
+        // random_speed is scaled to span the full ±4 speed range.
+        out.start  = idsp::clamp(p.start  + bipolar_rand(rng_state) * p.random_start,  0.f, 1.f);
+        out.length = idsp::clamp(p.length + bipolar_rand(rng_state) * p.random_length, 0.f, 1.f);
+        out.speed  = p.speed + bipolar_rand(rng_state) * p.random_speed * 8.f;
+        out.level  = idsp::clamp(p.level  + bipolar_rand(rng_state) * p.random_level,  0.f, 1.f);
+        out.pan    = idsp::clamp(p.pan    + bipolar_rand(rng_state) * p.random_pan,    0.f, 1.f);
+        out.loop   = p.loop;
 
-        const size_t start_pos = static_cast<size_t>(jit_start * static_cast<float>(buffer_size));
-        const size_t loop_len  = idsp::max<size_t>(
-            static_cast<size_t>(jit_length * static_cast<float>(buffer_size)), 1);
-        const size_t end_pos   = idsp::min(start_pos + loop_len, buffer_size);
+        out.time          = p.time;
+        out.skew          = p.skew;
+        out.shape         = p.shape;
+        out.loop_envelope = p.loop_envelope;
+        out.envelope_sync = p.envelope_sync;
 
-        // Envelope duration: sync ON ⇒ fraction of loop length; sync OFF ⇒ 0..5 s.
-        size_t env_dur = p.envelope_sync
-            ? static_cast<size_t>(p.time * static_cast<float>(loop_len))
-            : static_cast<size_t>(p.time * 5.0f * sample_rate);
-        if (env_dur == 0) env_dur = 1; // guard: a 0-length envelope would idle on the first sample
+        out.envelope_speed  = p.envelope_speed;
+        out.envelope_start  = p.envelope_start;
+        out.envelope_length = p.envelope_length;
+        out.envelope_level  = p.envelope_level;
+        out.envelope_pan    = p.envelope_pan;
+        return out;
+    }
 
-        const size_t attack  = static_cast<size_t>(p.skew * static_cast<float>(env_dur));
-        const size_t release = (env_dur > attack) ? (env_dur - attack) : 0;
+    // Pull the live-editable subset of the global params into a slot. Used
+    // when the user is live-editing the currently selected voice — random
+    // offsets are NOT applied here, those only fire on a fresh trigger.
+    VoiceLiveParams overlay_live_params(const ParameterData& p)
+    {
+        VoiceLiveParams out;
+        out.start  = p.start;
+        out.length = p.length;
+        out.speed  = p.speed;
+        out.level  = p.level;
+        out.pan    = p.pan;
+        out.loop   = p.loop;
 
-        return Voice::TriggerParams{
-            .start_pos    = start_pos,
-            .end_pos      = end_pos,
-            .length       = loop_len,
-            .base_speed   = jit_speed,
-            .base_level   = jit_level,
-            .base_pan     = jit_pan,
-            .sample_loops = p.loop,
-            .env_attack   = attack,
-            .env_release  = release,
-            .env_shape    = p.shape,
-            .env_loops    = p.loop_envelope,
-            .env_sync     = p.envelope_sync,
-            .depth_speed  = p.envelope_speed,
-            .depth_start  = p.envelope_start,
-            .depth_length = p.envelope_length,
-            .depth_level  = p.envelope_level,
-            .depth_pan    = p.envelope_pan,
-        };
+        out.time          = p.time;
+        out.skew          = p.skew;
+        out.shape         = p.shape;
+        out.loop_envelope = p.loop_envelope;
+        out.envelope_sync = p.envelope_sync;
+
+        out.envelope_speed  = p.envelope_speed;
+        out.envelope_start  = p.envelope_start;
+        out.envelope_length = p.envelope_length;
+        out.envelope_level  = p.envelope_level;
+        out.envelope_pan    = p.envelope_pan;
+        return out;
     }
 }
 
@@ -94,13 +100,24 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     // --- stop: peel off the oldest active voice ---
     if (p.stop) voices_.kill_oldest();
 
+    // --- live edit: push the user's current slider values into the selected
+    // voice's slot (only when that voice is actually active — inactive slots
+    // wait until the next trigger to take on their effective params).
+    const int sel = p.selected_voice;
+    if (sel >= 0 && static_cast<size_t>(sel) < max_voices && voices_[sel].is_active())
+    {
+        voice_live_params_[sel] = overlay_live_params(p);
+    }
+
     // --- play: allocate a voice and trigger it ---
     if (p.play)
     {
-        if (Voice* v = allocator_.acquire(voices_, p.voice_stealing))
+        const int preferred = (sel >= 0 && static_cast<size_t>(sel) < max_voices) ? sel : -1;
+        if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
         {
-            v->trigger(build_trigger_params(p, buffer_size, sample_rate_, rng_state_),
-                       ++launch_counter_);
+            const size_t slot = static_cast<size_t>(v - &voices_[0]);
+            voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
+            v->trigger(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
         }
         // else: fail-silent (stealing off, all voices busy)
     }
@@ -115,9 +132,14 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     const auto& left_buffer  = input.buffer.sample[0];
     const auto& right_buffer = input.buffer.sample[1];
 
-    for (auto& v : voices_)
+    for (size_t vi = 0; vi < voices_.size(); ++vi)
     {
+        auto& v = voices_[vi];
         if (!v.is_active()) continue;
+
+        // Push any live edits into the voice before processing this block.
+        v.set_live_params(voice_live_params_[vi], buffer_size, sample_rate_);
+
         for (size_t i = 0; i < block_size; ++i)
         {
             if (!v.is_active()) break;
@@ -131,8 +153,9 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     output.state.playback_position = voices_[0].is_active() ? voices_[0].position() : -1.0f;
     for (size_t i = 0; i < max_voices; ++i)
     {
-        output.state.voice_active[i]   = voices_[i].is_active();
-        output.state.voice_position[i] = voices_[i].position();
-        output.state.voice_volume[i]   = voices_[i].is_active() ? voices_[i].env_value() : 0.0f;
+        output.state.voice_active[i]      = voices_[i].is_active();
+        output.state.voice_position[i]    = voices_[i].position();
+        output.state.voice_volume[i]      = voices_[i].is_active() ? voices_[i].env_value() : 0.0f;
+        output.state.voice_live_params[i] = voice_live_params_[i];
     }
 }
