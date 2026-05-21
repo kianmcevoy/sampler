@@ -64,11 +64,17 @@ struct GuiInputData
 	std::string sample_file_path;
 	std::atomic<bool> file_path_ready { false };
 
-	// Currently-selected voice button. -1 means "no selection" (global mode):
-	// the audio thread treats slider edits as next-launch params. 0..max_voices-1
-	// means that slot is the live-edit target and the next `play` is forced
-	// into that slot.
+	// Currently-selected voice button. -1 means "no selection":
+	// in Auto mode (global_mode=false) the audio thread treats slider edits
+	// as next-launch params; in Global mode the slider edits overlay onto
+	// every active voice. 0..max_voices-1 means that slot is the live-edit
+	// target and the next `play` is forced into that slot.
 	std::atomic<int> selected_voice { -1 };
+
+	// Global-mode toggle. Mutually exclusive with selected_voice >= 0 by the
+	// GUI radio invariant. When true: slider edits overlay onto every active
+	// voice each block; `play` retriggers every active voice; `stop` kills all.
+	std::atomic<bool> global_mode { false };
 };
 
 #endif

@@ -42,6 +42,23 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 	output.parameter.loop_envelope =input.controls.buttons.at("loop_envelope");
 	output.parameter.voice_stealing = input.controls.buttons.at("voice_stealing");
 	output.parameter.envelope_sync = input.controls.buttons.at("envelope_sync");
+	output.parameter.envelope_trigger = input.controls.triggers.at("envelope_trigger");
+
+
+	switch(input.controls.dropdowns.at("comp_source"))
+    {
+        case 0:
+            output.parameter.comp_source = ComparatorSource::None;
+            break;
+        case 1:
+            output.parameter.comp_source = ComparatorSource::LoopPhase;
+            break;
+        case 2:
+            output.parameter.comp_source = ComparatorSource::EnvPhase;
+            break;
+    }
+
+	output.parameter.comp_threshold = input.controls.sliders.at("comp_threshold");
 
 	output.parameter.random_speed = input.controls.sliders.at("random_speed");
 	output.parameter.random_start = input.controls.sliders.at("random_start");
@@ -55,10 +72,17 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
     output.parameter.envelope_level = input.controls.sliders.at("envelope_level");
     output.parameter.envelope_pan = input.controls.sliders.at("envelope_pan");
 
+    output.parameter.phase_speed  = input.controls.sliders.at("phase_speed");
+    output.parameter.phase_start  = input.controls.sliders.at("phase_start");
+    output.parameter.phase_length = input.controls.sliders.at("phase_length");
+    output.parameter.phase_level  = input.controls.sliders.at("phase_level");
+    output.parameter.phase_pan    = input.controls.sliders.at("phase_pan");
+
     // Selected voice (GUI-thread state). The Instrument uses this both to
     // route live edits onto a specific voice and to force a `play` into that
     // slot. -1 means "no selection" — fall back to the normal allocator.
     output.parameter.selected_voice = input.gui.selected_voice.load();
+    output.parameter.global_mode    = input.gui.global_mode.load();
 
 	if (output.gui.waveform_ready.load() && !output.gui.waveform_left.empty())
 	{

@@ -17,6 +17,13 @@ enum class Mode
 	Looping
 };
 
+enum class ComparatorSource
+{
+	None,
+	LoopPhase,
+	EnvPhase
+};
+
 /** Per-voice live-editable parameter set.
  *
  * When a voice is launched, the audio thread writes the post-random effective
@@ -46,6 +53,12 @@ struct VoiceLiveParams
 	float envelope_length { 0.f };
 	float envelope_level  { 0.f };
 	float envelope_pan    { 0.f };
+
+	float phase_speed     { 0.f };
+	float phase_start     { 0.f };
+	float phase_length    { 0.f };
+	float phase_level     { 0.f };
+	float phase_pan       { 0.f };
 };
 
 struct ParameterData
@@ -67,6 +80,11 @@ struct ParameterData
 	bool loop_envelope;
     bool voice_stealing;
     bool envelope_sync;
+    bool envelope_trigger;
+
+    //comparator
+    ComparatorSource comp_source;       // 0 = None, 1 = loop phase, 2 = env phase
+    float  comp_threshold;
 
 	//random modulation
 	float random_speed;
@@ -82,12 +100,25 @@ struct ParameterData
 	float envelope_level;
 	float envelope_pan;
 
+    //phase (per-voice playhead) modulation
+	float phase_speed;
+	float phase_start;
+	float phase_length;
+	float phase_level;
+	float phase_pan;
+
 	// Per-voice live params. When `selected_voice` is in [0, max_voices) the
 	// matching slot is the live-edit target — its values are kept current
 	// from the GUI and the corresponding Voice reads from it each block.
 	// `selected_voice == -1` means "no voice selected" — at play time the
 	// allocator picks a slot normally; otherwise the named slot is forced.
 	int selected_voice { -1 };
+
+	// Global mode: slider edits overlay onto every active voice each block,
+	// `play` retriggers every active voice in unison, `stop` kills all.
+	// Mutually exclusive with selected_voice >= 0 (GUI radio invariant).
+	bool global_mode { false };
+
 	std::array<VoiceLiveParams, max_voices> voice_live_params {};
 };
 

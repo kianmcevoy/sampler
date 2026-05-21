@@ -42,10 +42,16 @@ public:
 
     void  kill();
 
+    /** Retrigger the envelope alone — position, direction, base params untouched.
+     *  Used by the envelope_trigger button when envelope_sync is OFF. */
+    void  trigger_envelope();
+
     bool     is_active()  const { return active_; }
     uint64_t launch_seq() const { return launch_seq_; }
     float    position()   const { return position_; }
     float    env_value()  const { return envelope_.current_value(); }
+    float    env_phase()  const { return envelope_.get_phase(); }
+    float    phase()      const;
 
     StereoFrame process(const idsp::LagrangeDelay<524288>& left,
                         const idsp::LagrangeDelay<524288>& right);
@@ -77,6 +83,12 @@ private:
     float depth_length_{0.f};
     float depth_level_{0.f};
     float depth_pan_{0.f};
+
+    float depth_phase_speed_{0.f};
+    float depth_phase_start_{0.f};
+    float depth_phase_length_{0.f};
+    float depth_phase_level_{0.f};
+    float depth_phase_pan_{0.f};
 
     // Live state
     float    position_{0.f};

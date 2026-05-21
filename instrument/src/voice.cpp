@@ -82,6 +82,24 @@ void Voice::set_live_params(const VoiceLiveParams& p, size_t buffer_size, float 
     depth_length_ = p.envelope_length;
     depth_level_  = p.envelope_level;
     depth_pan_    = p.envelope_pan;
+
+    depth_phase_speed_  = p.phase_speed;
+    depth_phase_start_  = p.phase_start;
+    depth_phase_length_ = p.phase_length;
+    depth_phase_level_  = p.phase_level;
+    depth_phase_pan_    = p.phase_pan;
+}
+
+// Lifetime progress in [0, 1]: 0 just after trigger, 1 about to hit the end.
+// Direction-aware so reverse playback ramps the same way forward does.
+float Voice::phase() const
+{
+    if (length_ == 0) return 0.f;
+    const float len = static_cast<float>(length_);
+    const float rel = forward_
+        ? (position_ - static_cast<float>(start_pos_)) / len
+        : (static_cast<float>(end_pos_) - position_)  / len;
+    return idsp::clamp(rel, 0.f, 1.f);
 }
 
 void Voice::trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
@@ -98,6 +116,11 @@ void Voice::kill()
 {
     active_ = false;
     envelope_.reset();
+}
+
+void Voice::trigger_envelope()
+{
+    envelope_.trigger(env_attack_, env_release_, env_shape_);
 }
 
 void Voice::retrigger_position()
@@ -142,42 +165,54 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
     const float e = envelope_.process();
     const bool now_active = envelope_.is_active();
 
+    // Per-voice playhead phase in [0, 1] — used as a second modulator
+    // alongside the envelope. Computed from the pre-advance position so the
+    // modulation it drives matches the sample we're about to read.
+    const float ph = this->phase();
+
     // --- Speed (magnitude only; direction locked at trigger) ---
     float speed = base_speed_;
-    if (depth_speed_ != 0.f)
+    if (depth_speed_ != 0.f || depth_phase_speed_ != 0.f)
     {
         const float base_mag = forward_ ? base_speed_ : -base_speed_;
-        float mag = base_mag + depth_speed_ * e * 4.f;
+        float mag = base_mag + (depth_speed_ * e + depth_phase_speed_ * ph) * 4.f;
         if (mag < 0.f) mag = 0.f;
         speed = forward_ ? mag : -mag;
     }
 
     // --- Start (read-position offset) ---
-    const float read_pos = (depth_start_ != 0.f)
-        ? position_ + depth_start_ * e * static_cast<float>(length_)
+    const float start_mod = depth_start_ * e + depth_phase_start_ * ph;
+    const float read_pos  = (start_mod != 0.f)
+        ? position_ + start_mod * static_cast<float>(length_)
         : position_;
 
     // --- Length (dynamic effective end) ---
-    const float effective_end = (depth_length_ != 0.f)
-        ? static_cast<float>(end_pos_) + depth_length_ * e * static_cast<float>(length_)
+    const float length_mod   = depth_length_ * e + depth_phase_length_ * ph;
+    const float effective_end = (length_mod != 0.f)
+        ? static_cast<float>(end_pos_) + length_mod * static_cast<float>(length_)
         : static_cast<float>(end_pos_);
 
-    // --- Level (multiplicative VCA) ---
-    float level_mod;
-    if (depth_level_ >= 0.f) level_mod = (1.f - depth_level_) + depth_level_ * e;
-    else                     level_mod = 1.f + depth_level_ * (1.f - e);
-    const float level = base_level_ * level_mod;
+    // --- Level (multiplicative VCA; envelope and phase mods multiply) ---
+    float env_level_mod;
+    if (depth_level_ >= 0.f) env_level_mod = (1.f - depth_level_) + depth_level_ * e;
+    else                     env_level_mod = 1.f + depth_level_ * (1.f - e);
+
+    float phase_level_mod;
+    if (depth_phase_level_ >= 0.f) phase_level_mod = (1.f - depth_phase_level_) + depth_phase_level_ * ph;
+    else                           phase_level_mod = 1.f + depth_phase_level_ * (1.f - ph);
+
+    const float level = base_level_ * env_level_mod * phase_level_mod;
 
     // --- Pan (LUT, skipped when unmodulated) ---
     float pan_l, pan_r;
-    if (depth_pan_ == 0.f)
+    if (depth_pan_ == 0.f && depth_phase_pan_ == 0.f)
     {
         pan_l = base_pan_l_;
         pan_r = base_pan_r_;
     }
     else
     {
-        const float pan = idsp::clamp(base_pan_ + depth_pan_ * e, 0.f, 1.f);
+        const float pan = idsp::clamp(base_pan_ + depth_pan_ * e + depth_phase_pan_ * ph, 0.f, 1.f);
         compute_pan_gains_lut(pan, pan_l, pan_r);
     }
 
@@ -195,10 +230,6 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
         {
             envelope_.trigger(env_attack_, env_release_, env_shape_);
             if (env_sync_) retrigger_position();
-        }
-        else
-        {
-            active_ = false;
         }
     }
 

@@ -60,12 +60,6 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_trigger("stop",        "Stop",        260.f, 215.f);
 	controls.add_button ("loop",        "Loop",        380.f, 215.f);
 
-    //envelope buttons
-    controls.add_button("envelope_trigger",  "Trigger Envelope", 740.f, 215.f);
-    controls.add_button("loop_envelope",  "Loop Envelope", 740.f, 215.f);
-	controls.add_button("voice_stealing", "Steal/Protect", 860.f, 215.f);
-	controls.add_button("envelope_sync",  "Sync Envelope", 980.f, 215.f);
-
 	//playback parameters (start/length fractions of sample; speed bipolar [-4,+4])
 	controls.add_slider("start",  "Start",   0.f,  1.f, 0.f,  20.f, 335.f);
 	controls.add_slider("length", "Length",  0.f,  1.f, 1.f,  140.f, 335.f);
@@ -74,23 +68,36 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_slider("pan",    "Pan",     0.f,  1.f, 0.5f, 500.f, 335.f);
 
 	//per-launch random deviation
-	controls.add_slider("random_start",  "Random Start",  0.f, 1.f, 0.f, 140.f, 455.f);
-	controls.add_slider("random_length", "Random Length", 0.f, 1.f, 0.f, 260.f, 455.f);
-    controls.add_slider("random_speed",  "Random Speed",  0.f, 1.f, 0.f,  20.f, 455.f);
+	controls.add_slider("random_start",  "Random Start",  0.f, 1.f, 0.f, 20.f, 455.f);
+	controls.add_slider("random_length", "Random Length", 0.f, 1.f, 0.f, 140.f, 455.f);
+    controls.add_slider("random_speed",  "Random Speed",  0.f, 1.f, 0.f,  260.f, 455.f);
 	controls.add_slider("random_level",  "Random Level",  0.f, 1.f, 0.f, 380.f, 455.f);
 	controls.add_slider("random_pan",    "Random Pan",    0.f, 1.f, 0.f, 500.f, 455.f);
 
 	//envelope routing depths, bipolar [-1, +1]
-	controls.add_slider("envelope_start",  "Envelope Start",  -1.f, 1.f, 0.f, 140.f, 575.f);
-	controls.add_slider("envelope_length", "Envelope Length", -1.f, 1.f, 0.f, 260.f, 575.f);
-    controls.add_slider("envelope_speed",  "Envelope Speed",  -1.f, 1.f, 0.f, 20.f, 575.f);
+	controls.add_slider("envelope_start",  "Envelope Start",  -1.f, 1.f, 0.f, 20.f, 575.f);
+	controls.add_slider("envelope_length", "Envelope Length", -1.f, 1.f, 0.f, 140.f, 575.f);
+    controls.add_slider("envelope_speed",  "Envelope Speed",  -1.f, 1.f, 0.f, 260.f, 575.f);
 	controls.add_slider("envelope_level",  "Envelope Level",  -1.f, 1.f, 0.f, 380.f, 575.f);
 	controls.add_slider("envelope_pan",    "Envelope Pan",    -1.f, 1.f, 0.f, 500.f, 575.f);
 
+    //playhead phase routing
+    controls.add_slider("phase_start", "Phase Start", -1.f, 1.f, 0.f, 20.f, 695.f);
+    controls.add_slider("phase_length", "Phase Length", -1.f, 1.f, 0.f, 140.f, 695.f);
+    controls.add_slider("phase_speed", "Phase Speed", -1.f, 1.f, 0.f, 260.f, 695.f);
+    controls.add_slider("phase_level", "Phase Level", -1.f, 1.f, 0.f, 380.f, 695.f);
+    controls.add_slider("phase_pan", "Phase Pan", -1.f, 1.f, 0.f, 500.f, 695.f);
+
 	//envelope controls
+    controls.add_button("loop_envelope",  "Loop Envelope", 740.f, 215.f);
+	controls.add_button("voice_stealing", "Steal/Protect", 860.f, 215.f);
+	controls.add_button("envelope_sync",  "Sync Envelope", 980.f, 215.f);
+    controls.add_trigger("envelope_trigger", "Trigger Envelope", 620.f, 215.f);
 	controls.add_slider("time",   "Time", 0.f, 1.f, 1.f,  740.f, 335.f);
 	controls.add_slider("skew",   "Skew", 0.f, 1.f, 0.5f, 860.f, 335.f);
 	controls.add_slider("shape",  "Shape", 0.f, 1.f, 0.f, 980.f, 335.f);
+    controls.add_dropdown("comp_source", "Comp Source", {"None", "Loop Phase", "Env Phase"}, 1100.f, 215.f);
+    controls.add_slider("comp_threshold", "Comp Threshold", 0.f, 1.f, 0.5f, 1100.f, 335.f);
 
     //voice buttons
     controls.add_voice_button("voice_one",   "1", 0, 620.f,  695.f);
@@ -101,5 +108,9 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     controls.add_voice_button("voice_six",   "6", 5, 1220.f, 695.f);
     controls.add_voice_button("voice_seven", "7", 6, 1340.f, 695.f);
     controls.add_voice_button("voice_eight", "8", 7, 1460.f, 695.f);
+
+    //global button
+    controls.add_button("auto", "Auto", 1340.f, 215.f);
+    controls.add_button("global", "Global", 1460.f, 215.f);
 
 }

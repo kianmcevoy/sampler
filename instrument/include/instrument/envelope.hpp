@@ -100,6 +100,18 @@ class Envelope
 
         inline bool is_active() const { return this->stage != Stage::Idle; }
 
+        /** Lifetime progress in [0, 1] across the full attack+release window.
+         *  Returns 0 when Idle. */
+        inline float get_phase() const
+        {
+            const size_t total = this->attack_len + this->release_len;
+            if (total == 0) return 0.f;
+            const size_t elapsed = (this->stage == Stage::Release)
+                ? this->attack_len + this->sample_count
+                : (this->stage == Stage::Attack ? this->sample_count : 0);
+            return static_cast<float>(elapsed) / static_cast<float>(total);
+        }
+
         inline void reset()
         {
             this->stage        = Stage::Idle;

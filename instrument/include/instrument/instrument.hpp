@@ -50,6 +50,12 @@ class Instrument
         // block we push these into the voice via Voice::set_live_params so
         // edits take effect immediately.
         std::array<VoiceLiveParams, max_voices> voice_live_params_{};
+
+        // Comparator state: index of the last "bucket" the source phase fell
+        // into, where bucket = floor(source / threshold). Fires on every
+        // increase of this index — so threshold=0.25 gives triggers at phase
+        // 0.25, 0.5, 0.75 (and another just after the wrap, ≈4/cycle).
+        int comp_prev_bucket_{0};
 };
 
 #endif
