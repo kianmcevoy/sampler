@@ -1,6 +1,6 @@
-[submodule "system"]
-	path = system
-	url = https://github.com/InstruoModular/JUCE-Prototyper-system.git
 [submodule "isl"]
 	path = isl
 	url = https://github.com/InstruoModular/isl
+[submodule "JUCE"]
+	path = system/JUCE
+	url = https://github.com/juce-framework/JUCE.git
