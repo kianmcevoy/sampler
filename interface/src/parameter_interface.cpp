@@ -3,6 +3,8 @@
 #include "idsp/functions.hpp"
 #include "system/asset_manager.hpp"
 
+#include <cmath>
+
 
 ParameterInterface::ParameterInterface(ParameterInterfaceOutputData& output)
 {
@@ -24,12 +26,17 @@ void ParameterInterface::load(const ParameterInterfaceLoadData& loaded, Paramete
 
 void ParameterInterface::process(const ParameterInterfaceInputData& input, ParameterInterfaceOutputData& output)
 {
+	// Parse MIDI first so velocity/pitch reads use the current slider values
+	// captured *before* any modwheel-driven start offset is applied below.
+	this->process_midi(input.midi, input.controls, output.parameter);
+
 	// Sliders return values already in their displayed ranges (configured in
 	// gui/src/controls.cpp), so no rescaling is needed here.
 	output.parameter.play   = input.controls.triggers.at("play");
 	output.parameter.stop   = input.controls.triggers.at("stop");
 	output.parameter.loop   = input.controls.buttons.at("loop");
-	output.parameter.start  = input.controls.sliders.at("start");
+	// Modwheel sums with the start slider, clamped to [0, 1].
+	output.parameter.start  = idsp::clamp(input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
 	output.parameter.length = input.controls.sliders.at("length");
 	output.parameter.speed  = input.controls.sliders.at("speed");
 	output.parameter.level  = input.controls.sliders.at("level");
@@ -192,4 +199,111 @@ bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file, P
     }
     output.gui.waveform_ready.store(true);
     return true;
+}
+
+void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
+                                      const GuiControlData& controls,
+                                      ParameterData& out)
+{
+    out.midi_event_count = 0;
+
+    const float slider_level   = controls.sliders.at("level");
+    const float slider_speed   = controls.sliders.at("speed");
+    const bool  voice_stealing = controls.buttons.at("voice_stealing");
+
+    // Push raw MIDI bytes through the parser. JUCE delivers each message as
+    // a contiguous block already framed by status byte; the imidi queue
+    // handles running-status and multi-byte streams internally.
+    for (const auto meta : midi)
+    {
+        this->midi_queue_.from_bytes(meta.data, static_cast<size_t>(meta.numBytes));
+    }
+
+    while (this->midi_queue_.num_messages() > 0
+        && out.midi_event_count < ParameterData::max_midi_events_per_block)
+    {
+        const imidi::Message msg = this->midi_queue_.read_message();
+        const auto t = msg.type();
+
+        if (t == imidi::MessageType::NoteOn)
+        {
+            const auto d = msg.data_as<imidi::Message::NoteOn>();
+            if (d.velocity == 0)
+            {
+                // MIDI running-status convention: NoteOn velocity 0 == NoteOff.
+                this->emit_note_off(d.note, out);
+                continue;
+            }
+
+            const int slot = this->allocate_midi_voice_slot(voice_stealing);
+            if (slot < 0) continue;   // all slots busy, stealing off — drop
+
+            const uint64_t seq = ++this->midi_seq_counter_;
+            this->active_notes_[slot] = ActiveNote { /*active=*/true, /*note=*/d.note, /*midi_seq=*/seq };
+
+            const float v01 = static_cast<float>(d.velocity) / 127.f;
+            const float level_scaled = slider_level * v01 * v01;
+            const float ratio = slider_speed * std::pow(2.f, (static_cast<float>(d.note) - 60.f) / 12.f);
+
+            out.midi_events[out.midi_event_count++] = MidiNoteEvent {
+                /*note_on=*/true,
+                /*midi_seq=*/seq,
+                /*velocity=*/level_scaled,
+                /*speed_ratio=*/ratio,
+            };
+        }
+        else if (t == imidi::MessageType::NoteOff)
+        {
+            const auto d = msg.data_as<imidi::Message::NoteOff>();
+            this->emit_note_off(d.note, out);
+        }
+        else if (t == imidi::MessageType::ControlChange)
+        {
+            const auto d = msg.data_as<imidi::Message::ControlChange>();
+            if (d.controller == 1)
+            {
+                // CC1 (modwheel) — latched, persists across blocks.
+                this->modwheel_position_ = static_cast<float>(d.value) / 127.f;
+            }
+        }
+        // PitchBend / ProgramChange / etc — ignored for now.
+    }
+}
+
+void ParameterInterface::emit_note_off(uint8_t note, ParameterData& out)
+{
+    for (size_t s = 0; s < this->active_notes_.size(); ++s)
+    {
+        auto& slot = this->active_notes_[s];
+        if (slot.active && slot.note == note)
+        {
+            if (out.midi_event_count < ParameterData::max_midi_events_per_block)
+            {
+                out.midi_events[out.midi_event_count++] = MidiNoteEvent {
+                    /*note_on=*/false,
+                    /*midi_seq=*/slot.midi_seq,
+                    /*velocity=*/0.f,
+                    /*speed_ratio=*/0.f,
+                };
+            }
+            slot = ActiveNote{};   // clear
+            return;                // one note-off → one voice release
+        }
+    }
+}
+
+int ParameterInterface::allocate_midi_voice_slot(bool voice_stealing)
+{
+    // First inactive slot wins.
+    for (size_t s = 0; s < this->active_notes_.size(); ++s)
+    {
+        if (!this->active_notes_[s].active) return static_cast<int>(s);
+    }
+    // All slots full. The audio-side VoiceAllocator picks the actual voice
+    // to steal by launch_seq, so any slot here is fine — we just need *a*
+    // mapping for note-off matching, and overwriting an existing slot means
+    // the previously-stolen note's note-off becomes a no-op (the voice it
+    // referred to is already gone). Pick slot 0 for determinism.
+    if (voice_stealing) return 0;
+    return -1;
 }

@@ -56,6 +56,12 @@ class Instrument
         // increase of this index — so threshold=0.25 gives triggers at phase
         // 0.25, 0.5, 0.75 (and another just after the wrap, ≈4/cycle).
         int comp_prev_bucket_{0};
+
+        // Per-voice MIDI ownership. Non-zero ⇒ the voice is currently held by
+        // a MIDI note with that sequence number; zero ⇒ not MIDI-owned (manual
+        // play, comparator, or finished MIDI note). Used to route note-off to
+        // the correct voice without depending on slot identity.
+        std::array<uint64_t, max_voices> voice_midi_seq_{};
 };
 
 #endif

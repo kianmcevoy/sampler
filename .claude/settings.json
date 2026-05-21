@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git ls-tree *)",
+      "Bash(git ls-remote *)",
+      "Bash(git submodule *)",
+      "Bash(git diff *)",
+      "Bash(ls -la /home/kian/instruo/sampler/build/sampler_artefacts/Debug/VST3/ 2>&1; echo \"---\"; ls -la /home/kian/instruo/plugins 2>&1 | head -5)",
+      "Read(//home/kian/instruo/plugins/**)",
+      "Bash(chmod +x /home/kian/instruo/sampler/install.sh)"
+    ]
+  }
+}

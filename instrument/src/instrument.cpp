@@ -128,6 +128,14 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
 
     const auto& p = input.parameter;
 
+    // Clear MIDI ownership for any voice that became inactive since last
+    // block (natural envelope completion, stop, or voice-stealing). If we
+    // skip this, a recycled slot could erroneously match a stale note-off.
+    for (size_t s = 0; s < voices_.size(); ++s)
+    {
+        if (!voices_[s].is_active()) voice_midi_seq_[s] = 0;
+    }
+
     const int selected_voice = p.selected_voice;
     const bool voice_selected = (selected_voice >= 0 && static_cast<size_t>(selected_voice) < max_voices);
 
@@ -176,6 +184,45 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
                 v->trigger(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
             }
             // else: fail-silent (stealing off, all voices busy)
+        }
+    }
+
+    // --- MIDI note events ---
+    // ParameterInterface has already parsed velocity → level, MIDI pitch →
+    // speed ratio. Note-ons allocate a voice via the same allocator the play
+    // button uses (respecting voice_stealing) and trigger gated so the
+    // envelope holds at peak until the matching note-off arrives. Note-offs
+    // find the voice via midi_seq and call release(), which transitions the
+    // envelope into its release stage from wherever it currently is.
+    for (size_t i = 0; i < p.midi_event_count; ++i)
+    {
+        const auto& ev = p.midi_events[i];
+        if (ev.note_on)
+        {
+            if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, -1))
+            {
+                const size_t slot = static_cast<size_t>(v - &voices_[0]);
+                VoiceLiveParams vp = build_effective_live_params(p, rng_state_);
+                vp.level = ev.velocity;     // already squared & scaled by slider
+                vp.speed = ev.speed_ratio;  // already multiplied by slider speed
+                voice_live_params_[slot] = vp;
+                v->trigger(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_, /*gated=*/true);
+                voice_midi_seq_[slot] = ev.midi_seq;
+            }
+            // else: all voices busy, stealing off — drop.
+        }
+        else
+        {
+            // note-off: locate the voice that owns this MIDI seq.
+            for (size_t s = 0; s < voices_.size(); ++s)
+            {
+                if (voice_midi_seq_[s] == ev.midi_seq && voices_[s].is_active())
+                {
+                    voices_[s].release();
+                    voice_midi_seq_[s] = 0;
+                    break;
+                }
+            }
         }
     }
 

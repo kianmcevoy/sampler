@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 /** Structure of parameter data for the instrument.
  * The data stored here should be hardware agnostic (as far as is practical) and
@@ -61,8 +62,25 @@ struct VoiceLiveParams
 	float phase_pan       { 0.f };
 };
 
+/** Per-block MIDI note event published by ParameterInterface to Instrument.
+ *
+ * `midi_seq` is a monotonic counter assigned at note-on; the matching
+ * note-off carries the same seq so the Instrument can locate which voice
+ * to release without ParameterInterface needing to predict allocator
+ * behaviour. velocity/speed_ratio are only meaningful for note-on events.
+ */
+struct MidiNoteEvent
+{
+	bool     note_on;     // true = note-on (trigger), false = note-off (release)
+	uint64_t midi_seq;    // unique per note-on; note-off references the same seq
+	float    velocity;    // level (slider_level * (vel/127)^2) — note-on only
+	float    speed_ratio; // slider_speed * 2^((note-60)/12) — note-on only
+};
+
 struct ParameterData
 {
+	static constexpr size_t max_midi_events_per_block = 32;
+
 	//playback controls
 	float speed;
 	float start;
@@ -120,6 +138,12 @@ struct ParameterData
 	bool global_mode { false };
 
 	std::array<VoiceLiveParams, max_voices> voice_live_params {};
+
+	// Per-block MIDI events. ParameterInterface writes; Instrument consumes.
+	// Both run on the audio thread, so no atomics needed. Excess events past
+	// max_midi_events_per_block are dropped at the source.
+	std::array<MidiNoteEvent, max_midi_events_per_block> midi_events {};
+	size_t midi_event_count { 0 };
 };
 
 #endif

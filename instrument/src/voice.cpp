@@ -102,20 +102,25 @@ float Voice::phase() const
     return idsp::clamp(rel, 0.f, 1.f);
 }
 
-void Voice::trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
+void Voice::trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq, bool gated)
 {
     forward_ = (p.speed >= 0.f);
     this->set_live_params(p, buffer_size, sample_rate);
     this->retrigger_position();
     active_     = (length_ > 0);
     launch_seq_ = seq;
-    envelope_.trigger(env_attack_, env_release_, env_shape_);
+    envelope_.trigger(env_attack_, env_release_, env_shape_, gated);
 }
 
 void Voice::kill()
 {
     active_ = false;
     envelope_.reset();
+}
+
+void Voice::release()
+{
+    envelope_.release();
 }
 
 void Voice::trigger_envelope()

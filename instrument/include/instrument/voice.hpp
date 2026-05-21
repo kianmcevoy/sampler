@@ -33,14 +33,19 @@ public:
     /** Begin playback. `p` carries the post-random *effective* live params for
      * this launch; `buffer_size`/`sample_rate` are needed to resolve
      * fractional start/length/time into sample counts. Direction is locked
-     * from the sign of `p.speed`. */
-    void  trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
+     * from the sign of `p.speed`. `gated=true` puts the envelope in AHR mode
+     * (holds at peak after attack); use release() to begin the release. */
+    void  trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq, bool gated = false);
 
     /** Apply a fresh live-param snapshot without retriggering. Position,
      * envelope phase, direction, and active state are preserved. */
     void  set_live_params(const VoiceLiveParams& p, size_t buffer_size, float sample_rate);
 
     void  kill();
+
+    /** Release the envelope gate. Used by the MIDI path on note-off. If the
+     *  voice was triggered ungated this is a no-op. */
+    void  release();
 
     /** Retrigger the envelope alone — position, direction, base params untouched.
      *  Used by the envelope_trigger button when envelope_sync is OFF. */
