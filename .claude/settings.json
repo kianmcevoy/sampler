@@ -7,7 +7,30 @@
       "Bash(git diff *)",
       "Bash(ls -la /home/kian/instruo/sampler/build/sampler_artefacts/Debug/VST3/ 2>&1; echo \"---\"; ls -la /home/kian/instruo/plugins 2>&1 | head -5)",
       "Read(//home/kian/instruo/plugins/**)",
-      "Bash(chmod +x /home/kian/instruo/sampler/install.sh)"
+      "Bash(chmod +x /home/kian/instruo/sampler/install.sh)",
+      "Bash(git -C /home/kian/instruo/sampler/system status --short)",
+      "Bash(git -C /home/kian/instruo/sampler/system/JUCE log -1 --oneline)",
+      "Bash(git -C /home/kian/instruo/sampler/system/JUCE rev-parse HEAD)",
+      "Bash(git -C /home/kian/instruo/sampler/system/JUCE remote -v)",
+      "Bash(git -C /home/kian/instruo/sampler/system/JUCE rev-parse --abbrev-ref HEAD)",
+      "Bash(git -C /home/kian/instruo/sampler submodule deinit -f system)",
+      "Bash(git -C /home/kian/instruo/sampler status --short)",
+      "Bash(rmdir system *)",
+      "Bash(mkdir -p system)",
+      "Bash(cp -a /tmp/sampler-system-backup-1779394552/include system/)",
+      "Bash(cp -a /tmp/sampler-system-backup-1779394552/src system/)",
+      "Bash(cd /home/kian/instruo/sampler; ls .git/modules/system 2>&1 | head; echo \"---\"; ls .git/modules/system/modules 2>&1; echo \"---\"; mv .git/modules/system/modules/JUCE .git/modules/JUCE && echo \"moved JUCE git dir to top-level\"; ls .git/modules/JUCE 2>&1 | head; echo \"--- removing now-empty system git dir ---\"; rm -rf .git/modules/system; ls .git/modules/)",
+      "Bash(git -C /home/kian/instruo/sampler/system/JUCE status --short)",
+      "Bash(cd /home/kian/instruo/sampler; ls README.md setup.sh 2>&1; git ls-files -- README.md setup.sh 2>&1; echo \"--- present in backup? ---\"; ls /tmp/sampler-system-backup-1779394552/README.md /tmp/sampler-system-backup-1779394552/setup.sh 2>&1)",
+      "Read(//tmp/sampler-system-backup-1779394552/**)",
+      "Bash(git log *)",
+      "Bash(git rm *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ],
+    "additionalDirectories": [
+      "/home/kian/instruo/sampler/.git/modules/system/modules/JUCE",
+      "/home/kian/instruo/sampler/.git/modules/system"
     ]
   }
 }
