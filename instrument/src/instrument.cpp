@@ -331,7 +331,7 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     {
         output.state.voice_active[i]      = voices_[i].is_active();
         output.state.voice_position[i]    = voices_[i].position();
-        output.state.voice_volume[i]      = voices_[i].is_active();
+        output.state.voice_volume[i]      = voices_[i].current_level();
         output.state.voice_live_params[i] = voice_live_params_[i];
     }
 }

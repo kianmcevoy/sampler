@@ -110,9 +110,9 @@ class MainPanel final:
         /// @brief Voice slot (0..max_voices-1) controlled by the i-th voice
         /// button. Parallel to add_voice_button declaration order.
         size_t voice_slot_for_button(size_t button_idx) const;
-        /// @brief Drive the LED brightness of voice button `button_idx` to
-        /// reflect that slot's audio-thread activity state.
-        void set_voice_active(size_t button_idx, bool active);
+        /// @brief Drive the LED brightness of voice button `button_idx` from a
+        /// 0..1 amplitude (e.g. envelope × base level) so it fades with sound.
+        void set_voice_brightness(size_t button_idx, float brightness);
         /// @brief Toggle the "selected" visual cue on voice button
         /// `button_idx`. Independent of activity state.
         void set_voice_selected(size_t button_idx, bool selected);

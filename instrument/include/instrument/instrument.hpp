@@ -1,7 +1,6 @@
 #ifndef INSTRUMENT_PARENT_H
 #define INSTRUMENT_PARENT_H
 
-#include "instrument/dsp.hpp"
 #include "instrument/parameter_data.hpp"
 #include "instrument/state_data.hpp"
 #include "instrument/voice.hpp"

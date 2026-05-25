@@ -6,36 +6,25 @@
 #include <vector>
 #include <array>
 #include "instrument/constants.hpp"
+#include "interface/voice_param_table.hpp"
 
-// Atomic mirror of VoiceLiveParams for the audio→GUI display channel. The
-// GUI samples these when the user selects a voice, to snap the sliders to
-// that voice's current effective values.
+// Atomic mirror of VoiceLiveParams for the audio→GUI display channel.
+// Indexed by position in voice_param_floats / voice_param_bools so that
+// adding a new per-voice param is a one-line edit to that table.
 struct VoiceParamSnapshot
 {
-	std::atomic<float> start          { 0.f };
-	std::atomic<float> length         { 1.f };
-	std::atomic<float> speed          { 1.f };
-	std::atomic<float> level          { 1.f };
-	std::atomic<float> pan            { 0.5f };
-	std::atomic<bool>  loop           { false };
-
-	std::atomic<float> time           { 1.f };
-	std::atomic<float> skew           { 0.5f };
-	std::atomic<float> shape          { 0.f };
-	std::atomic<bool>  loop_envelope  { false };
-	std::atomic<bool>  envelope_sync  { false };
-
-	std::atomic<float> envelope_speed  { 0.f };
-	std::atomic<float> envelope_start  { 0.f };
-	std::atomic<float> envelope_length { 0.f };
-	std::atomic<float> envelope_level  { 0.f };
-	std::atomic<float> envelope_pan    { 0.f };
+	std::array<std::atomic<float>, voice_param_floats.size()> floats {};
+	std::array<std::atomic<bool>,  voice_param_bools.size()>  bools  {};
 };
 
 struct GuiOutputData
 {
-	std::atomic<int> start { 0 };
-	std::atomic<int> end { 69 };
+	// Sample-index markers showing the current playback range on the
+	// waveform display (derived from the start + length sliders, or set
+	// from a freshly-loaded file). Both are absolute sample positions in
+	// the loaded buffer.
+	std::atomic<int> display_marker_start { 0 };
+	std::atomic<int> display_marker_end   { 0 };
 
 	// Per-voice display data (cursor positions and envelope levels).
 

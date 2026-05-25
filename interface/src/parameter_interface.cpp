@@ -98,14 +98,14 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 		{
 			const int start_point = static_cast<int>(input.controls.sliders.at("start") * num_samples);
 			const int duration = idsp::max(static_cast<int>(input.controls.sliders.at("length") * num_samples), 1);
-			output.gui.start = idsp::clamp(start_point, 0, num_samples - 1);
-			output.gui.end = idsp::min(start_point + duration, num_samples);
+			output.gui.display_marker_start = idsp::clamp(start_point, 0, num_samples - 1);
+			output.gui.display_marker_end   = idsp::min(start_point + duration, num_samples);
 		}
 	}
 	else
 	{
-		output.gui.start.store(0);
-		output.gui.end.store(0);
+		output.gui.display_marker_start.store(0);
+		output.gui.display_marker_end.store(0);
 	}
 
 
@@ -132,7 +132,7 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 }
 
 // Load the audio file at `audio_file` into both the playback delay lines and
-// display waveform buffer. Initialises gui.start / gui.end from the supplied slider positions. Returns true on success.
+// display waveform buffer. Initialises gui.display_marker_start / _end from the supplied slider positions. Returns true on success.
 bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file, ParameterInterfaceOutputData& output, float start_slider, float length_slider)
 {
     if (!audio_file.existsAsFile()) return false;
@@ -187,8 +187,8 @@ bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file, P
 
     const int start_point = static_cast<int>(start_slider * num_samples);
     const int duration    = idsp::max(static_cast<int>(length_slider * num_samples), 1);
-    output.gui.start = idsp::clamp(start_point, 0, num_samples - 1);
-    output.gui.end   = idsp::min(start_point + duration, num_samples);
+    output.gui.display_marker_start = idsp::clamp(start_point, 0, num_samples - 1);
+    output.gui.display_marker_end   = idsp::min(start_point + duration, num_samples);
 
     output.gui.waveform_left.resize(num_samples);
     output.gui.waveform_right.resize(num_samples);

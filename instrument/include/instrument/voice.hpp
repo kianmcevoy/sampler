@@ -57,6 +57,9 @@ public:
     float    env_value()  const { return envelope_.current_value(); }
     float    env_phase()  const { return envelope_.get_phase(); }
     float    phase()      const;
+    /** Current output amplitude: envelope value × base level. 0 when inactive.
+     *  Drives voice-button LED brightness so it fades with the envelope. */
+    float    current_level() const { return active_ ? envelope_.current_value() * base_level_ : 0.f; }
 
     StereoFrame process(const idsp::LagrangeDelay<524288>& left,
                         const idsp::LagrangeDelay<524288>& right);

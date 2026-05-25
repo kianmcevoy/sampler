@@ -1,4 +1,8 @@
 #include "system/gui_controls.hpp"
+#include "instrument/constants.hpp"
+
+#include <array>
+#include <cstddef>
 
 /**
  * @brief Use this function to build your control scheme.
@@ -100,14 +104,19 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     controls.add_slider("comp_threshold", "Comp Threshold", 0.f, 1.f, 0.5f, 1100.f, 335.f);
 
     //voice buttons
-    controls.add_voice_button("voice_one",   "1", 0, 620.f,  695.f);
-    controls.add_voice_button("voice_two",   "2", 1, 740.f,  695.f);
-    controls.add_voice_button("voice_three", "3", 2, 860.f,  695.f);
-    controls.add_voice_button("voice_four",  "4", 3, 980.f,  695.f);
-    controls.add_voice_button("voice_five",  "5", 4, 1100.f, 695.f);
-    controls.add_voice_button("voice_six",   "6", 5, 1220.f, 695.f);
-    controls.add_voice_button("voice_seven", "7", 6, 1340.f, 695.f);
-    controls.add_voice_button("voice_eight", "8", 7, 1460.f, 695.f);
+    static constexpr std::array<const char*, max_voices> voice_button_ids = {
+        "voice_one", "voice_two", "voice_three", "voice_four",
+        "voice_five", "voice_six", "voice_seven", "voice_eight",
+    };
+    static constexpr std::array<const char*, max_voices> voice_button_labels = {
+        "1", "2", "3", "4", "5", "6", "7", "8",
+    };
+    for (size_t i = 0; i < max_voices; ++i)
+    {
+        controls.add_voice_button(
+            voice_button_ids[i], voice_button_labels[i], static_cast<int>(i),
+            620.f + 120.f * static_cast<float>(i), 695.f);
+    }
 
     //global button
     controls.add_button("auto", "Auto", 1340.f, 215.f);

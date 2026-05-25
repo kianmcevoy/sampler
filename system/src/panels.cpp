@@ -361,11 +361,11 @@ class VoiceButtonContainer:
             }
         }
 
-        // Drive LED brightness directly from the audio thread's per-voice
-        // activity flag (called from MainComponent's timer).
-        void set_active(bool active)
+        // Drive LED brightness from the audio thread's per-voice amplitude
+        // (envelope × base level). 0 = silent (LED off), 1 = peak.
+        void set_brightness(float brightness)
         {
-            this->button.view_led().brightness().set(active ? 1.f : 0.f);
+            this->button.view_led().brightness().set(juce::jlimit(0.f, 1.f, brightness));
         }
 
         // Selection visual: light the LED a little even when the voice isn't
@@ -517,8 +517,8 @@ class WaveformDisplay:
             const float centre_y = bounds.getCentreY();
 
             // Get selection range
-            const int start_sample = gui_output.start.load();
-            const int end_sample = gui_output.end.load();
+            const int start_sample = gui_output.display_marker_start.load();
+            const int end_sample = gui_output.display_marker_end.load();
 
             // Calculate how many samples per pixel
             const int samples_per_pixel = std::max(1, num_samples / static_cast<int>(width));
@@ -624,8 +624,8 @@ class WaveformDisplay:
                 return;
             }
 
-            const int current_start = gui_output.start.load();
-            const int current_end = gui_output.end.load();
+            const int current_start = gui_output.display_marker_start.load();
+            const int current_end = gui_output.display_marker_end.load();
 
             bool any_voice_active = false;
             for (size_t i = 0; i < max_voices; ++i)
@@ -825,9 +825,9 @@ size_t MainPanel::voice_slot_for_button(size_t button_idx) const
     return this->voice_button_containers[button_idx]->voice_index();
 }
 
-void MainPanel::set_voice_active(size_t button_idx, bool active)
+void MainPanel::set_voice_brightness(size_t button_idx, float brightness)
 {
-    this->voice_button_containers[button_idx]->set_active(active);
+    this->voice_button_containers[button_idx]->set_brightness(brightness);
 }
 
 void MainPanel::set_voice_selected(size_t button_idx, bool selected)

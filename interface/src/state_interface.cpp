@@ -1,5 +1,6 @@
 #include "interface/state_interface.hpp"
 #include "interface/gui_data.hpp"
+#include "interface/voice_param_table.hpp"
 
 
 StateInterface::StateInterface(StateInterfaceOutputData& output)
@@ -20,23 +21,13 @@ void StateInterface::process(const StateInterfaceInputData& input, StateInterfac
 		output.gui.voice_position[i].store(input.state.voice_position[i]);
 		output.gui.voice_volume[i].store(input.state.voice_volume[i]);
 
+		// Mirror every per-voice live param into its atomic slot via the
+		// voice_param_table — adding a new field needs no edits here.
 		const auto& src = input.state.voice_live_params[i];
 		auto& dst = output.gui.voice_params_snapshot[i];
-		dst.start.store(src.start);
-		dst.length.store(src.length);
-		dst.speed.store(src.speed);
-		dst.level.store(src.level);
-		dst.pan.store(src.pan);
-		dst.loop.store(src.loop);
-		dst.time.store(src.time);
-		dst.skew.store(src.skew);
-		dst.shape.store(src.shape);
-		dst.loop_envelope.store(src.loop_envelope);
-		dst.envelope_sync.store(src.envelope_sync);
-		dst.envelope_speed.store(src.envelope_speed);
-		dst.envelope_start.store(src.envelope_start);
-		dst.envelope_length.store(src.envelope_length);
-		dst.envelope_level.store(src.envelope_level);
-		dst.envelope_pan.store(src.envelope_pan);
+		for (size_t fi = 0; fi < voice_param_floats.size(); ++fi)
+			dst.floats[fi].store(src.*(voice_param_floats[fi].field));
+		for (size_t bi = 0; bi < voice_param_bools.size(); ++bi)
+			dst.bools[bi].store(src.*(voice_param_bools[bi].field));
 	}
 }

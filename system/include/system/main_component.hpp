@@ -2,6 +2,7 @@
 #define GUI_MAIN_COMPONENT_H
 
 #include "instrument/parameter_data.hpp"
+#include "interface/mode_controller.hpp"
 #include "system/panels.hpp"
 
 #include "igui/igui.hpp"
@@ -110,37 +111,24 @@ private:
 
     std::shared_ptr<juce::FileChooser> file_chooser;
 
-    // Voice-select state (GUI-thread). -1 means "no selection" — combined with
-    // global_on_ this gives the three modes: Auto (-1, false) / Voice N (>=0, false)
-    // / Global (-1, true). The GUI enforces the radio invariant; the audio
-    // thread reads the resulting selected_voice + global_mode atomics.
-    int  selected_voice_{-1};
-    bool global_on_{false};
-
-    // Snapshot of the live-editable JUCE params taken when selection leaves
-    // the no-voice state (selected_voice_ moves from -1 → N, or entering
-    // Global). Restored back into the JUCE params when we return to the
-    // no-voice state, so the user's "next launch" intent isn't lost.
-    VoiceLiveParams global_params_cache_{};
-    bool global_params_cached_{false};
+    // Three-mode radio (Auto / Voice N / Global) lives in interface/.
+    // MainComponent provides it with JUCE-thread snap/apply callbacks and
+    // pumps it from timerCallback / on_voice_button_clicked.
+    ModeController mode_controller_;
 
     void refresh_voice_button_visuals();
+
+    // Bulk JUCE param read/write of the per-voice live-editable set
+    // (driven by interface/voice_param_table.hpp).
     void apply_params_to_juce(const VoiceLiveParams& p);
     VoiceLiveParams snapshot_juce_params() const;
-    VoiceLiveParams read_voice_snapshot(size_t voice_index) const;
 
-    // Mode transitions (radio enforcement). Each one updates selected_voice_,
-    // global_on_, the GuiInputData atomics, the auto/global JUCE button
-    // params, and the voice-button LED visuals.
-    void enter_auto_mode();
-    void enter_voice_mode(size_t voice_index);
-    void enter_global_mode();
-
-    // JUCE bool-param helpers (shared by apply_params_to_juce and the mode
-    // transitions). `set_bool_juce` writes through to JUCE + notifies the
-    // host; `read_juce_bool` returns the current parameter value.
-    void set_bool_juce(const juce::String& id, bool value);
-    bool read_juce_bool(const juce::String& id) const;
+    // Single-param JUCE helpers used by the bulk methods above and the
+    // mode-controller tick (for the auto/global toggle bools).
+    void  set_bool_juce  (const juce::String& id, bool value);
+    bool  read_juce_bool (const juce::String& id) const;
+    void  set_float_juce (const juce::String& id, float displayed_value);
+    float read_float_juce(const juce::String& id, float fallback) const;
 };
 
 /// @brief Gets the main component by searching up the component tree.
