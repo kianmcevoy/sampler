@@ -36,15 +36,16 @@ struct VoiceParamBoolEntry
     bool VoiceLiveParams::* field;
 };
 
-inline constexpr std::array<VoiceParamFloatEntry, 18> voice_param_floats = {{
+inline constexpr std::array<VoiceParamFloatEntry, 23> voice_param_floats = {{
     {"start",            &VoiceLiveParams::start},
     {"length",           &VoiceLiveParams::length},
     {"speed",            &VoiceLiveParams::speed},
     {"level",            &VoiceLiveParams::level},
     {"pan",              &VoiceLiveParams::pan},
-    {"time",             &VoiceLiveParams::time},
-    {"skew",             &VoiceLiveParams::skew},
-    {"shape",            &VoiceLiveParams::shape},
+    {"attack",           &VoiceLiveParams::attack},
+    {"decay",            &VoiceLiveParams::decay},
+    {"sustain",          &VoiceLiveParams::sustain},
+    {"release",          &VoiceLiveParams::release},
     {"envelope_speed",   &VoiceLiveParams::envelope_speed},
     {"envelope_start",   &VoiceLiveParams::envelope_start},
     {"envelope_length",  &VoiceLiveParams::envelope_length},
@@ -55,12 +56,14 @@ inline constexpr std::array<VoiceParamFloatEntry, 18> voice_param_floats = {{
     {"phase_length",     &VoiceLiveParams::phase_length},
     {"phase_level",      &VoiceLiveParams::phase_level},
     {"phase_pan",        &VoiceLiveParams::phase_pan},
+    {"pitch",            &VoiceLiveParams::pitch},
+    {"window_size",      &VoiceLiveParams::window_size},
+    {"window_shape",     &VoiceLiveParams::window_shape},
+    {"width",            &VoiceLiveParams::width},
 }};
 
-inline constexpr std::array<VoiceParamBoolEntry, 3> voice_param_bools = {{
+inline constexpr std::array<VoiceParamBoolEntry, 1> voice_param_bools = {{
     {"loop",             &VoiceLiveParams::loop},
-    {"loop_envelope",    &VoiceLiveParams::loop_envelope},
-    {"envelope_sync",    &VoiceLiveParams::envelope_sync},
 }};
 
 #endif

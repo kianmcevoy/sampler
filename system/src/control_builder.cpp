@@ -11,13 +11,13 @@ void GuiControlBuilder::set_display(float x, float y, float width, float height)
     this->display_geometry = {x, y, width, height};
 }
 
-void GuiControlBuilder::add_slider(const juce::String& identifier, const juce::String& label,
+void GuiControlBuilder::add_slider(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                    float x, float y, float w, float h)
 {
-    this->add_slider(identifier, label, 0.f, 1.f, 0.f, x, y, w, h);
+    this->add_slider(panel, identifier, label, 0.f, 1.f, 0.f, x, y, w, h);
 }
 
-void GuiControlBuilder::add_slider(const juce::String& identifier, const juce::String& label,
+void GuiControlBuilder::add_slider(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                    float min, float max, float default_value,
                                    float x, float y, float w, float h)
 {
@@ -42,9 +42,10 @@ void GuiControlBuilder::add_slider(const juce::String& identifier, const juce::S
     this->parameter_ids.emplace_back(identifier);
     this->slider_ranges.emplace_back(min, max);
     this->control_geometries.push_back({x, y, w, h});
+    this->control_panels.emplace_back(panel);
 }
 
-void GuiControlBuilder::add_button(const juce::String& identifier, const juce::String& label,
+void GuiControlBuilder::add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                    float x, float y, float w, float h)
 {
     this->check_id(identifier);
@@ -58,9 +59,10 @@ void GuiControlBuilder::add_button(const juce::String& identifier, const juce::S
     this->button_ids.emplace_back(identifier);
     this->parameter_ids.emplace_back(identifier);
     this->control_geometries.push_back({x, y, w, h});
+    this->control_panels.emplace_back(panel);
 }
 
-void GuiControlBuilder::add_voice_button(const juce::String& identifier, const juce::String& label,
+void GuiControlBuilder::add_voice_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                          size_t voice_index,
                                          float x, float y, float w, float h)
 {
@@ -80,9 +82,10 @@ void GuiControlBuilder::add_voice_button(const juce::String& identifier, const j
     this->voice_button_indices.emplace_back(voice_index);
     this->parameter_ids.emplace_back(identifier);
     this->control_geometries.push_back({x, y, w, h});
+    this->control_panels.emplace_back(panel);
 }
 
-void GuiControlBuilder::add_trigger(const juce::String& identifier, const juce::String& label,
+void GuiControlBuilder::add_trigger(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                     float x, float y, float w, float h)
 {
     this->check_id(identifier);
@@ -96,9 +99,10 @@ void GuiControlBuilder::add_trigger(const juce::String& identifier, const juce::
     this->trigger_ids.emplace_back(identifier);
     this->parameter_ids.emplace_back(identifier);
     this->control_geometries.push_back({x, y, w, h});
+    this->control_panels.emplace_back(panel);
 }
 
-void GuiControlBuilder::add_dropdown(const juce::String& identifier, const juce::String& label,
+void GuiControlBuilder::add_dropdown(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                      const juce::StringArray& options,
                                      float x, float y, float w, float h)
 {
@@ -114,6 +118,7 @@ void GuiControlBuilder::add_dropdown(const juce::String& identifier, const juce:
     this->dropdown_ids.emplace_back(identifier);
     this->parameter_ids.emplace_back(identifier);
     this->control_geometries.push_back({x, y, w, h});
+    this->control_panels.emplace_back(panel);
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout&& GuiControlBuilder::transfer_parameter_layout()

@@ -82,7 +82,17 @@ private:
     std::unique_ptr<igui::FontLifetimeManager> font_lifetime_manager;
 
     MainPanel main_panel;
+    ModulationPanel modulation_panel;
     SettingsPanel settings_panel;
+
+    // Tab buttons that swap which project panel is visible. Owned directly
+    // by MainComponent so they're always visible regardless of which panel
+    // is currently displayed.
+    igui::LedButton main_tab_button;
+    igui::LedButton modulation_tab_button;
+
+    juce::String active_panel_{"main"};
+    void set_active_panel(const juce::String& name);
 
     std::reference_wrapper<const WindowSize> current_window_full_size;
     float& window_scale;

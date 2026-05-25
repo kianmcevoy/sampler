@@ -1,6 +1,8 @@
 #ifndef GUI_PANELS_H
 #define GUI_PANELS_H
 
+#include "system/control_builder.hpp"
+
 #include "igui/igui.hpp"
 
 #include "JuceHeader.h"
@@ -120,6 +122,9 @@ class MainPanel final:
         igui::LedButton settings_menu_button;
 
         std::vector<std::unique_ptr<ControlContainer>> controls;
+        // Per-control geometry, parallel to `controls`. Populated alongside
+        // controls during construction (only entries for this panel's name).
+        std::vector<GuiControlBuilder::ControlGeometry> control_geometries;
 
         std::unique_ptr<juce::Component> waveform_display;
 
@@ -127,6 +132,23 @@ class MainPanel final:
         // Non-owning pointers into `controls`. Parallel to the order in which
         // add_voice_button was called.
         std::vector<VoiceButtonContainer*> voice_button_containers;
+};
+
+/** Secondary project panel: hosts only the controls tagged "modulation".
+ *  Same canvas size as MainPanel; only one of the two is visible at a time
+ *  (selected via tab buttons in MainComponent). */
+class ModulationPanel final:
+    public PanelBase
+{
+    public:
+        ModulationPanel(EngineAudioProcessor& processor);
+
+        void paint(juce::Graphics& g) override;
+
+        void bounds_changed() override;
+
+        std::vector<std::unique_ptr<ControlContainer>> controls;
+        std::vector<GuiControlBuilder::ControlGeometry> control_geometries;
 };
 
 class SettingsPanel final:

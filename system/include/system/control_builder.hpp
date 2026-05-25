@@ -30,7 +30,11 @@ class GuiControlBuilder
          */
         void set_display(float x, float y, float width, float height);
 
-        void add_slider(const juce::String& identifier, const juce::String& label,
+        /** All add_* methods take `panel` as their first argument: the name
+         *  of the user-facing panel that should host this control (e.g.
+         *  "main", "modulation"). MainComponent's tab strip displays a tab
+         *  per declared panel name and shows the matching panel underneath. */
+        void add_slider(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                         float x, float y, float w = 120.f, float h = 120.f);
 
         /** Add a slider with an explicit displayed range and default. The
@@ -38,11 +42,11 @@ class GuiControlBuilder
          *  are interpreted as the displayed values shown in the GUI and
          *  returned by `input.controls.sliders.at(id)` in ParameterInterface.
          */
-        void add_slider(const juce::String& identifier, const juce::String& label,
+        void add_slider(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                         float min, float max, float default_value,
                         float x, float y, float w = 120.f, float h = 120.f);
 
-        void add_button(const juce::String& identifier, const juce::String& label,
+        void add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                         float x, float y, float w = 120.f, float h = 120.f);
 
         /** Add a voice-select button. Visually a LED button like add_button,
@@ -50,14 +54,14 @@ class GuiControlBuilder
          *  its click toggles radio-style voice selection (writes selected
          *  voice index into GuiInputData). `voice_index` must be in
          *  [0, max_voices). */
-        void add_voice_button(const juce::String& identifier, const juce::String& label,
+        void add_voice_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                               size_t voice_index,
                               float x, float y, float w = 120.f, float h = 120.f);
 
-        void add_trigger(const juce::String& identifier, const juce::String& label,
+        void add_trigger(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                          float x, float y, float w = 120.f, float h = 120.f);
 
-        void add_dropdown(const juce::String& identifier, const juce::String& label,
+        void add_dropdown(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                           const juce::StringArray& options,
                           float x, float y, float w = 120.f, float h = 120.f);
 
@@ -89,6 +93,10 @@ class GuiControlBuilder
          */
         const std::vector<ControlGeometry>& get_control_geometries() const;
 
+        /** Per-control panel name, parallel to get_all_parameter_identifiers().
+         *  Panels filter their child controls by matching this name. */
+        const juce::String& panel_for(size_t i) const { return this->control_panels[i]; }
+
         float get_panel_width() const;
         float get_panel_height() const;
 
@@ -117,6 +125,10 @@ class GuiControlBuilder
 
         // Per-control geometry, parallel to parameter_ids.
         std::vector<ControlGeometry> control_geometries;
+
+        // Per-control panel name, parallel to parameter_ids. Controls filter
+        // into their respective panels by matching this name.
+        std::vector<juce::String> control_panels;
 
         float panel_width  = 800.f;
         float panel_height = 600.f;

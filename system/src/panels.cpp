@@ -658,6 +658,161 @@ class WaveformDisplay:
 };
 
 
+namespace
+{
+    // Walk all_params and instantiate the matching ControlContainer for any
+    // entry whose builder-side panel name matches `panel_name`. The per-type
+    // indices advance unconditionally so the next match works even when we
+    // skip a control. Voice-button click handlers go through the supplied
+    // callback (typically MainComponent::on_voice_button_clicked) wherever
+    // the voice buttons land.
+    void populate_panel_controls(
+        EngineAudioProcessor& ap,
+        const juce::String& panel_name,
+        std::vector<std::unique_ptr<ControlContainer>>& out_controls,
+        std::vector<GuiControlBuilder::ControlGeometry>& out_geometries,
+        std::vector<VoiceButtonContainer*>* out_voice_buttons,
+        const std::function<void(size_t)>& voice_button_on_click)
+    {
+        const auto& builder    = ap.get_gui_control_builder();
+        const auto& geometries = builder.get_control_geometries();
+
+        size_t float_params_index        = 0;
+        size_t bool_params_index         = 0;
+        size_t trigger_params_index      = 0;
+        size_t choice_params_index       = 0;
+        size_t voice_button_params_index = 0;
+
+        for (size_t i = 0; i < ap.all_params.size(); ++i)
+        {
+            auto* param = ap.all_params[i];
+            const bool keep = (builder.panel_for(i) == panel_name);
+
+            if ((voice_button_params_index < ap.voice_button_params.size())
+            && (param == ap.voice_button_params[voice_button_params_index]))
+            {
+                if (keep)
+                {
+                    const size_t voice_idx = ap.voice_button_indices[voice_button_params_index];
+                    out_controls.emplace_back(std::make_unique<VoiceButtonContainer>(
+                        param,
+                        new igui::InstruoLedTextButtonElement(
+                            param->getName(32),
+                            igui::InstruoLedTextButtonElement::IndicationStyle::Outline
+                        ),
+                        voice_idx,
+                        voice_button_on_click
+                    ));
+                    out_geometries.push_back(geometries[i]);
+                    if (out_voice_buttons != nullptr)
+                    {
+                        out_voice_buttons->push_back(
+                            static_cast<VoiceButtonContainer*>(out_controls.back().get())
+                        );
+                    }
+                }
+                voice_button_params_index++;
+            }
+            else if ((float_params_index < ap.float_params.size())
+            && (param == ap.float_params[float_params_index]))
+            {
+                if (keep)
+                {
+                    out_controls.emplace_back(std::make_unique<SliderContainer>(
+                        param,
+                        new igui::InstruoKnobVectorElement(
+                            param->getName(32),
+                            [&ap, param, float_params_index] -> juce::String
+                            {
+                                const auto& range = ap.float_param_ranges[float_params_index];
+                                const auto value = range.convertFrom0to1(param->getValue());
+                                const auto id = param->getParameterID();
+
+                                if (id == "pan")
+                                {
+                                    // Bipolar around 0.5 — <0.5 left / >0.5 right.
+                                    return juce::String((value - 0.5f) * 200.f, 0) + "%";
+                                }
+                                if (id == "start" || id == "length" || id == "level"
+                                    || id == "random_speed" || id == "random_start" || id == "random_length"
+                                    || id == "random_level" || id == "random_pan")
+                                {
+                                    return juce::String(value * 100.f, 0) + "%";
+                                }
+                                // speed (-4..4) and anything else: show the raw value.
+                                return juce::String(value, 2);
+                            }
+                        )
+                    ));
+                    out_geometries.push_back(geometries[i]);
+
+                    // Bipolar sliders (default sits at 0.5 of the normalised
+                    // range) get a centre reference so the active arc fills
+                    // outward from the midpoint.
+                    const float norm_default = param->getDefaultValue();
+                    if (norm_default > 0.49f && norm_default < 0.51f)
+                    {
+                        auto* container = dynamic_cast<SliderContainer*>(out_controls.back().get());
+                        if (container != nullptr)
+                        {
+                            auto* knob_view = dynamic_cast<igui::InstruoKnobVectorElement*>(&container->slider.view());
+                            if (knob_view != nullptr) knob_view->set_reference_point(0.5f);
+                        }
+                    }
+                }
+                float_params_index++;
+            }
+            else if ((bool_params_index < ap.bool_params.size())
+            && (param == ap.bool_params[bool_params_index]))
+            {
+                if (keep)
+                {
+                    out_controls.emplace_back(std::make_unique<ButtonContainer>(
+                        param,
+                        new igui::InstruoLedTextButtonElement(
+                            param->getName(32),
+                            igui::InstruoLedTextButtonElement::IndicationStyle::Outline
+                        )
+                    ));
+                    out_geometries.push_back(geometries[i]);
+                }
+                bool_params_index++;
+            }
+            else if ((trigger_params_index < ap.trigger_params.size())
+            && (param == ap.trigger_params[trigger_params_index]))
+            {
+                if (keep)
+                {
+                    out_controls.emplace_back(std::make_unique<TriggerContainer>(
+                        param,
+                        new igui::InstruoTextButtonElement(param->getName(32))
+                    ));
+                    out_geometries.push_back(geometries[i]);
+                }
+                trigger_params_index++;
+            }
+            else if ((choice_params_index < ap.choice_params.size())
+            && (param == ap.choice_params[choice_params_index]))
+            {
+                if (keep)
+                {
+                    out_controls.emplace_back(std::make_unique<DropdownContainer>(
+                        param,
+                        new igui::InstruoComboBoxElement(),
+                        param->getName(32)
+                    ));
+                    out_geometries.push_back(geometries[i]);
+                }
+                choice_params_index++;
+            }
+            else
+            {
+                jassertfalse;
+            }
+        }
+    }
+}
+
 MainPanel::MainPanel(EngineAudioProcessor& ap):
 PanelBase(ap),
 settings_menu_button(new igui::InstruoLedButtonImageElement(
@@ -672,133 +827,14 @@ settings_menu_button(new igui::InstruoLedButtonImageElement(
     });
     this->settings_menu_button.set_brightness_as_state_listener();
 
-    size_t float_params_index = 0;
-    size_t bool_params_index = 0;
-    size_t trigger_params_index = 0;
-    size_t choice_params_index = 0;
-    size_t voice_button_params_index = 0;
-    for (size_t i = 0; i < this->audio_processor.all_params.size(); i++)
-    {
-        auto* param = this->audio_processor.all_params[i];
-
-        if ((voice_button_params_index < this->audio_processor.voice_button_params.size())
-        && (param == this->audio_processor.voice_button_params[voice_button_params_index]))
+    populate_panel_controls(
+        ap, "main",
+        this->controls, this->control_geometries,
+        &this->voice_button_containers,
+        [this](size_t clicked_voice)
         {
-            const size_t voice_idx = this->audio_processor.voice_button_indices[voice_button_params_index];
-            this->controls.emplace_back(std::make_unique<VoiceButtonContainer>(
-                param,
-                new igui::InstruoLedTextButtonElement(
-                    param->getName(32),
-                    igui::InstruoLedTextButtonElement::IndicationStyle::Outline
-                ),
-                voice_idx,
-                [this](size_t clicked_voice)
-                {
-                    this->get_main_component().on_voice_button_clicked(clicked_voice);
-                }
-            ));
-            this->voice_button_containers.push_back(
-                static_cast<VoiceButtonContainer*>(this->controls.back().get())
-            );
-            voice_button_params_index++;
-        }
-        else if ((float_params_index < this->audio_processor.float_params.size())
-        && (param == this->audio_processor.float_params[float_params_index]))
-        {
-            this->controls.emplace_back(std::make_unique<SliderContainer>(
-                param,
-                new igui::InstruoKnobVectorElement(
-                    param->getName(32),
-                    [this, param, float_params_index] -> juce::String
-                    {
-                        const auto& range = this->audio_processor.float_param_ranges[float_params_index];
-                        const auto value = range.convertFrom0to1(param->getValue());
-                        const auto id = param->getParameterID();
-
-                        if (id == "pan")
-                        {
-                            // Bipolar around 0.5 — <0.5 left / >0.5 right.
-                            return juce::String((value - 0.5f) * 200.f, 0) + "%";
-                        }
-                        if (id == "skew")
-                        {
-                            // Bipolar around 0.5: 0 = decay, 0.5 = triangle, 1 = ramp.
-                            return juce::String((value - 0.5f) * 2.f, 2);
-                        }
-                        if (id == "start" || id == "length" || id == "level"
-                            || id == "random_speed" || id == "random_start" || id == "random_length"
-                            || id == "random_level" || id == "random_pan")
-                        {
-                            return juce::String(value * 100.f, 0) + "%";
-                        }
-                        // speed (-4..4) and anything else: show the raw value.
-                        return juce::String(value, 2);
-                    }
-                )
-            ));
-
-            // Bipolar sliders (default sits at the midpoint of the range —
-            // e.g. speed=0 in [-4,4], skew=0.5 in [0,1]) get a centre
-            // reference so the active arc fills outward from 0 rather
-            // than from the left edge.
-            {
-                const float norm_default = param->getDefaultValue();
-                if (norm_default > 0.49f && norm_default < 0.51f)
-                {
-                    auto* container = dynamic_cast<SliderContainer*>(this->controls.back().get());
-                    if (container != nullptr)
-                    {
-                        auto* knob_view = dynamic_cast<igui::InstruoKnobVectorElement*>(&container->slider.view());
-                        if (knob_view != nullptr)
-                        {
-                            knob_view->set_reference_point(0.5f);
-                        }
-                    }
-                }
-            }
-
-            float_params_index++;
-        }
-        else if ((bool_params_index < this->audio_processor.bool_params.size())
-        && (param == this->audio_processor.bool_params[bool_params_index]))
-        {
-            this->controls.emplace_back(std::make_unique<ButtonContainer>(
-                param,
-                new igui::InstruoLedTextButtonElement(
-                    param->getName(32),
-                    igui::InstruoLedTextButtonElement::IndicationStyle::Outline
-                )
-            ));
-            bool_params_index++;
-        }
-        else if ((trigger_params_index < this->audio_processor.trigger_params.size())
-        && (param == this->audio_processor.trigger_params[trigger_params_index]))
-        {
-            this->controls.emplace_back(std::make_unique<TriggerContainer>(
-                param,
-                new igui::InstruoTextButtonElement(
-                    param->getName(32)
-                )
-            ));
-            trigger_params_index++;
-        }
-        else if ((choice_params_index < this->audio_processor.choice_params.size())
-        && (param == this->audio_processor.choice_params[choice_params_index]))
-        {
-            this->controls.emplace_back(std::make_unique<DropdownContainer>(
-                param,
-                new igui::InstruoComboBoxElement(),
-                param->getName(32)
-            ));
-            choice_params_index++;
-        }
-        else
-        {
-            // Parameter is neither float, bool, or choice, or the parameters
-            // are out of order, or there are too many parameters
-            jassertfalse;
-        }
-    }
+            this->get_main_component().on_voice_button_clicked(clicked_voice);
+        });
 
     for (auto& control : this->controls)
     {
@@ -847,15 +883,52 @@ void MainPanel::bounds_changed()
     this->place_component(*this->waveform_display, display.w, display.h,
                           display.x + display.w / 2.f, display.y + display.h / 2.f);
 
-    const auto& geometries = this->audio_processor.get_gui_control_builder().get_control_geometries();
-    jassert(geometries.size() == this->controls.size());
-
-    const size_t count = std::min(geometries.size(), this->controls.size());
-    for (size_t i = 0; i < count; ++i)
+    jassert(this->control_geometries.size() == this->controls.size());
+    for (size_t i = 0; i < this->controls.size(); ++i)
     {
         auto& control = *this->controls[i];
-        const auto& g = geometries[i];
+        const auto& g = this->control_geometries[i];
         // x/y are top-left in the design canvas; place_component expects centre.
+        this->place_component(control, g.w, g.h, g.x + g.w / 2.f, g.y + g.h / 2.f);
+
+        if (dynamic_cast<SliderContainer*>(&control) != nullptr)
+        {
+            control.set_subdimentions(4.f, 12);
+        }
+        else
+        {
+            control.set_subdimentions(2.f, 12);
+        }
+    }
+}
+
+ModulationPanel::ModulationPanel(EngineAudioProcessor& ap):
+PanelBase(ap)
+{
+    populate_panel_controls(
+        ap, "modulation",
+        this->controls, this->control_geometries,
+        /*out_voice_buttons=*/nullptr,
+        /*voice_button_on_click=*/{});
+
+    for (auto& control : this->controls)
+    {
+        this->addAndMakeVisible(*control);
+    }
+}
+
+void ModulationPanel::paint(juce::Graphics& g)
+{
+    this->draw_panel_background(g);
+}
+
+void ModulationPanel::bounds_changed()
+{
+    jassert(this->control_geometries.size() == this->controls.size());
+    for (size_t i = 0; i < this->controls.size(); ++i)
+    {
+        auto& control = *this->controls[i];
+        const auto& g = this->control_geometries[i];
         this->place_component(control, g.w, g.h, g.x + g.w / 2.f, g.y + g.h / 2.f);
 
         if (dynamic_cast<SliderContainer*>(&control) != nullptr)

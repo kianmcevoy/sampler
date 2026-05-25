@@ -32,9 +32,10 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 
 	// Sliders return values already in their displayed ranges (configured in
 	// gui/src/controls.cpp), so no rescaling is needed here.
-	output.parameter.play   = input.controls.triggers.at("play");
-	output.parameter.stop   = input.controls.triggers.at("stop");
-	output.parameter.loop   = input.controls.buttons.at("loop");
+	output.parameter.play        = input.controls.triggers.at("play");
+	output.parameter.stop        = input.controls.triggers.at("stop");
+	output.parameter.loop        = input.controls.buttons.at("loop");
+	output.parameter.timestretch = input.controls.buttons.at("timestretch");
 	// Modwheel sums with the start slider, clamped to [0, 1].
 	output.parameter.start  = idsp::clamp(input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
 	output.parameter.length = input.controls.sliders.at("length");
@@ -42,30 +43,13 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 	output.parameter.level  = input.controls.sliders.at("level");
 	output.parameter.pan    = input.controls.sliders.at("pan");
 
-	output.parameter.time    = input.controls.sliders.at("time");
-	output.parameter.skew    = input.controls.sliders.at("skew");
-	output.parameter.shape   = input.controls.sliders.at("shape");
+	output.parameter.attack  = input.controls.sliders.at("attack");
+	output.parameter.decay   = input.controls.sliders.at("decay");
+	output.parameter.sustain = input.controls.sliders.at("sustain");
+	output.parameter.release = input.controls.sliders.at("release");
 
-	output.parameter.loop_envelope =input.controls.buttons.at("loop_envelope");
 	output.parameter.voice_stealing = input.controls.buttons.at("voice_stealing");
-	output.parameter.envelope_sync = input.controls.buttons.at("envelope_sync");
 	output.parameter.envelope_trigger = input.controls.triggers.at("envelope_trigger");
-
-
-	switch(input.controls.dropdowns.at("comp_source"))
-    {
-        case 0:
-            output.parameter.comp_source = ComparatorSource::None;
-            break;
-        case 1:
-            output.parameter.comp_source = ComparatorSource::LoopPhase;
-            break;
-        case 2:
-            output.parameter.comp_source = ComparatorSource::EnvPhase;
-            break;
-    }
-
-	output.parameter.comp_threshold = input.controls.sliders.at("comp_threshold");
 
 	output.parameter.random_speed = input.controls.sliders.at("random_speed");
 	output.parameter.random_start = input.controls.sliders.at("random_start");
@@ -84,6 +68,16 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
     output.parameter.phase_length = input.controls.sliders.at("phase_length");
     output.parameter.phase_level  = input.controls.sliders.at("phase_level");
     output.parameter.phase_pan    = input.controls.sliders.at("phase_pan");
+
+    output.parameter.pitch        = input.controls.sliders.at("pitch");
+    output.parameter.window_size  = input.controls.sliders.at("window_size");
+    output.parameter.window_shape = input.controls.sliders.at("window_shape");
+    output.parameter.width        = input.controls.sliders.at("width");
+
+    output.parameter.random_pitch        = input.controls.sliders.at("random_pitch");
+    output.parameter.random_window_size  = input.controls.sliders.at("random_window_size");
+    output.parameter.random_window_shape = input.controls.sliders.at("random_window_shape");
+    output.parameter.random_width        = input.controls.sliders.at("random_width");
 
     // Selected voice (GUI-thread state). The Instrument uses this both to
     // route live edits onto a specific voice and to force a `play` into that
@@ -208,7 +202,6 @@ void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
     out.midi_event_count = 0;
 
     const float slider_level   = controls.sliders.at("level");
-    const float slider_speed   = controls.sliders.at("speed");
     const bool  voice_stealing = controls.buttons.at("voice_stealing");
 
     // Push raw MIDI bytes through the parser. JUCE delivers each message as
@@ -243,13 +236,15 @@ void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
 
             const float v01 = static_cast<float>(d.velocity) / 127.f;
             const float level_scaled = slider_level * v01 * v01;
-            const float ratio = slider_speed * std::pow(2.f, (static_cast<float>(d.note) - 60.f) / 12.f);
+            // Pure pitch ratio (no slider speed baked in) — the Instrument
+            // applies it to either pitch or speed depending on timestretch.
+            const float ratio = std::pow(2.f, (static_cast<float>(d.note) - 60.f) / 12.f);
 
             out.midi_events[out.midi_event_count++] = MidiNoteEvent {
                 /*note_on=*/true,
                 /*midi_seq=*/seq,
                 /*velocity=*/level_scaled,
-                /*speed_ratio=*/ratio,
+                /*note_ratio=*/ratio,
             };
         }
         else if (t == imidi::MessageType::NoteOff)
@@ -283,7 +278,7 @@ void ParameterInterface::emit_note_off(uint8_t note, ParameterData& out)
                     /*note_on=*/false,
                     /*midi_seq=*/slot.midi_seq,
                     /*velocity=*/0.f,
-                    /*speed_ratio=*/0.f,
+                    /*note_ratio=*/0.f,
                 };
             }
             slot = ActiveNote{};   // clear

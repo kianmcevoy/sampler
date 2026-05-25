@@ -50,16 +50,10 @@ class Instrument
         // edits take effect immediately.
         std::array<VoiceLiveParams, max_voices> voice_live_params_{};
 
-        // Comparator state: index of the last "bucket" the source phase fell
-        // into, where bucket = floor(source / threshold). Fires on every
-        // increase of this index — so threshold=0.25 gives triggers at phase
-        // 0.25, 0.5, 0.75 (and another just after the wrap, ≈4/cycle).
-        int comp_prev_bucket_{0};
-
         // Per-voice MIDI ownership. Non-zero ⇒ the voice is currently held by
         // a MIDI note with that sequence number; zero ⇒ not MIDI-owned (manual
-        // play, comparator, or finished MIDI note). Used to route note-off to
-        // the correct voice without depending on slot identity.
+        // play, envelope_trigger, or finished MIDI note). Used to route note-off
+        // to the correct voice without depending on slot identity.
         std::array<uint64_t, max_voices> voice_midi_seq_{};
 };
 

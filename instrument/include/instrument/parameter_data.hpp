@@ -18,13 +18,6 @@ enum class Mode
 	Looping
 };
 
-enum class ComparatorSource
-{
-	None,
-	LoopPhase,
-	EnvPhase
-};
-
 /** Per-voice live-editable parameter set.
  *
  * When a voice is launched, the audio thread writes the post-random effective
@@ -43,11 +36,12 @@ struct VoiceLiveParams
 	float pan           { 0.5f };
 	bool  loop          { false };
 
-	float time          { 1.f };
-	float skew          { 0.5f };
-	float shape         { 0.f };
-	bool  loop_envelope { false };
-	bool  envelope_sync { false };
+	// ADSR envelope: attack/decay/release are durations (scaled against
+	// loop length or 0..5 s by Voice::set_live_params); sustain is a level.
+	float attack        { 0.01f };
+	float decay         { 0.1f };
+	float sustain       { 0.8f };
+	float release       { 0.3f };
 
 	float envelope_speed  { 0.f };
 	float envelope_start  { 0.f };
@@ -60,6 +54,16 @@ struct VoiceLiveParams
 	float phase_length    { 0.f };
 	float phase_level     { 0.f };
 	float phase_pan       { 0.f };
+
+	// Granular per-voice params.
+	// pitch: per-sample read rate inside grains (independent of `speed`).
+	// window_size: grain length in seconds (also crossfade length when width=1).
+	// window_shape: 0=rect, 0.33=down-ramp, 0.66=cosine, 1=up-ramp (4-way morph).
+	// width: 1..8, number of grains in the cluster. Stored as float, snapped at use.
+	float pitch         { 1.f };
+	float window_size   { 0.5f };
+	float window_shape  { 0.f };
+	float width         { 1.f };
 };
 
 /** Per-block MIDI note event published by ParameterInterface to Instrument.
@@ -67,14 +71,15 @@ struct VoiceLiveParams
  * `midi_seq` is a monotonic counter assigned at note-on; the matching
  * note-off carries the same seq so the Instrument can locate which voice
  * to release without ParameterInterface needing to predict allocator
- * behaviour. velocity/speed_ratio are only meaningful for note-on events.
+ * behaviour. velocity/note_ratio are only meaningful for note-on events.
  */
 struct MidiNoteEvent
 {
 	bool     note_on;     // true = note-on (trigger), false = note-off (release)
 	uint64_t midi_seq;    // unique per note-on; note-off references the same seq
 	float    velocity;    // level (slider_level * (vel/127)^2) — note-on only
-	float    speed_ratio; // slider_speed * 2^((note-60)/12) — note-on only
+	float    note_ratio;  // pure 2^((note-60)/12) pitch ratio — Instrument decides
+	                      // whether to apply it to speed or pitch based on timestretch.
 };
 
 struct ParameterData
@@ -90,19 +95,15 @@ struct ParameterData
 	bool play;
 	bool stop;
 	bool loop;
+	bool timestretch;
 
-	//envelope controls
-	float time;
-	float skew;
-	float shape;
-	bool loop_envelope;
+	//envelope controls (ADSR)
+	float attack;
+	float decay;
+	float sustain;
+	float release;
     bool voice_stealing;
-    bool envelope_sync;
     bool envelope_trigger;
-
-    //comparator
-    ComparatorSource comp_source;       // 0 = None, 1 = loop phase, 2 = env phase
-    float  comp_threshold;
 
 	//random modulation
 	float random_speed;
@@ -124,6 +125,18 @@ struct ParameterData
 	float phase_length;
 	float phase_level;
 	float phase_pan;
+
+	//granular per-voice (mirrors VoiceLiveParams' granular section)
+	float pitch;
+	float window_size;
+	float window_shape;
+	float width;
+
+	//granular random modulation (per-launch jitter)
+	float random_pitch;
+	float random_window_size;
+	float random_window_shape;
+	float random_width;
 
 	// Per-voice live params. When `selected_voice` is in [0, max_voices) the
 	// matching slot is the live-edit target — its values are kept current

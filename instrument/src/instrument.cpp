@@ -21,6 +21,17 @@ namespace
         return static_cast<float>(xorshift32(s) >> 8) * (1.f / 8388608.f) - 1.f;
     }
 
+    // When timestretch is off (or width snaps to 1) pitch is forced to track
+    // speed exactly — the granular pitch/window machinery is bypassed and the
+    // voice behaves like a single playhead reading at `speed`. Width=1 always
+    // forces this because there are no overlapping grains to mask a pitch ≠
+    // speed mismatch at the loop seam.
+    inline bool pitch_follows_speed(const ParameterData& p, float width)
+    {
+        const int w = static_cast<int>(width + 0.5f);
+        return !p.timestretch || w <= 1;
+    }
+
     // Apply per-launch random_* jitter to the supplied global params and
     // return the resulting "effective" live params for a new voice.
     VoiceLiveParams build_effective_live_params(const ParameterData& p, uint32_t& rng_state)
@@ -34,11 +45,10 @@ namespace
         out.pan    = idsp::clamp(p.pan    + bipolar_rand(rng_state) * p.random_pan,    0.f, 1.f);
         out.loop   = p.loop;
 
-        out.time          = p.time;
-        out.skew          = p.skew;
-        out.shape         = p.shape;
-        out.loop_envelope = p.loop_envelope;
-        out.envelope_sync = p.envelope_sync;
+        out.attack  = p.attack;
+        out.decay   = p.decay;
+        out.sustain = p.sustain;
+        out.release = p.release;
 
         out.envelope_speed  = p.envelope_speed;
         out.envelope_start  = p.envelope_start;
@@ -51,6 +61,17 @@ namespace
         out.phase_length = p.phase_length;
         out.phase_level  = p.phase_level;
         out.phase_pan    = p.phase_pan;
+
+        // Granular: random_pitch is scaled to span ±4 (same magnitude as
+        // random_speed). random_width spans 1..8 (so a value of 1.f produces
+        // full-range jitter). random_window_size is clamped within the
+        // displayed [0.1, 1.0] s range.
+        out.pitch        = p.pitch + bipolar_rand(rng_state) * p.random_pitch * 4.f;
+        out.window_size  = idsp::clamp(p.window_size  + bipolar_rand(rng_state) * p.random_window_size * 0.9f, 0.1f, 1.f);
+        out.window_shape = idsp::clamp(p.window_shape + bipolar_rand(rng_state) * p.random_window_shape, 0.f, 1.f);
+        out.width        = idsp::clamp(p.width        + bipolar_rand(rng_state) * p.random_width * 7.f, 1.f, 8.f);
+
+        if (pitch_follows_speed(p, out.width)) out.pitch = out.speed;
         return out;
     }
 
@@ -67,11 +88,10 @@ namespace
         out.pan    = p.pan;
         out.loop   = p.loop;
 
-        out.time          = p.time;
-        out.skew          = p.skew;
-        out.shape         = p.shape;
-        out.loop_envelope = p.loop_envelope;
-        out.envelope_sync = p.envelope_sync;
+        out.attack  = p.attack;
+        out.decay   = p.decay;
+        out.sustain = p.sustain;
+        out.release = p.release;
 
         out.envelope_speed  = p.envelope_speed;
         out.envelope_start  = p.envelope_start;
@@ -84,26 +104,14 @@ namespace
         out.phase_length = p.phase_length;
         out.phase_level  = p.phase_level;
         out.phase_pan    = p.phase_pan;
-        return out;
-    }
 
-    // Pick the active voice with the largest launch_seq_. Returns nullptr if
-    // no voice is active. Used by envelope_trigger (sync-OFF, no selection)
-    // and the comparator (no selection) to follow the "newest active voice"
-    // convention used elsewhere in the GUI.
-    Voice* find_newest_active(VoicePool& voices)
-    {
-        Voice* newest = nullptr;
-        uint64_t best_seq = 0;
-        for (size_t i = 0; i < voices.size(); ++i)
-        {
-            if (voices[i].is_active() && (!newest || voices[i].launch_seq() > best_seq))
-            {
-                newest = &voices[i];
-                best_seq = voices[i].launch_seq();
-            }
-        }
-        return newest;
+        out.pitch        = p.pitch;
+        out.window_size  = p.window_size;
+        out.window_shape = p.window_shape;
+        out.width        = p.width;
+
+        if (pitch_follows_speed(p, out.width)) out.pitch = out.speed;
+        return out;
     }
 }
 
@@ -167,33 +175,37 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     {
         if (p.global_mode)
         {
+            // Retrigger every active voice as plain (no envelope) — matches
+            // the play button's semantics, applied across all active slots.
+            // Drops any MIDI ownership since the voice is now play-driven.
             for (size_t i = 0; i < voices_.size(); ++i)
             {
                 if (!voices_[i].is_active()) continue;
                 voice_live_params_[i] = build_effective_live_params(p, rng_state_);
-                voices_[i].trigger(voice_live_params_[i], buffer_size, sample_rate_, ++launch_counter_);
+                voices_[i].trigger_plain(voice_live_params_[i], buffer_size, sample_rate_, ++launch_counter_);
+                voice_midi_seq_[i] = 0;
             }
         }
         else
         {
+            // Play button: plain (no envelope) voice. Loops or plays-through
+            // per the loop button, terminates naturally at end of sample (if
+            // !loop) or runs until killed/stolen.
             const int preferred = voice_selected ? selected_voice : -1;
             if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
             {
                 const size_t slot = static_cast<size_t>(v - &voices_[0]);
                 voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
-                v->trigger(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+                v->trigger_plain(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
             }
             // else: fail-silent (stealing off, all voices busy)
         }
     }
 
     // --- MIDI note events ---
-    // ParameterInterface has already parsed velocity → level, MIDI pitch →
-    // speed ratio. Note-ons allocate a voice via the same allocator the play
-    // button uses (respecting voice_stealing) and trigger gated so the
-    // envelope holds at peak until the matching note-off arrives. Note-offs
-    // find the voice via midi_seq and call release(), which transitions the
-    // envelope into its release stage from wherever it currently is.
+    // Note-ons allocate a voice and trigger a gated ADSR; the matching
+    // note-off finds the voice via midi_seq and calls release(), which
+    // transitions the envelope into its release stage from the current value.
     for (size_t i = 0; i < p.midi_event_count; ++i)
     {
         const auto& ev = p.midi_events[i];
@@ -203,10 +215,23 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
             {
                 const size_t slot = static_cast<size_t>(v - &voices_[0]);
                 VoiceLiveParams vp = build_effective_live_params(p, rng_state_);
-                vp.level = ev.velocity;     // already squared & scaled by slider
-                vp.speed = ev.speed_ratio;  // already multiplied by slider speed
+                vp.level = ev.velocity;   // already squared & scaled by slider
+                // MIDI note pitch routing: bypass random_speed/random_pitch
+                // jitter for predictable response. Timestretch ON → note
+                // scales pitch only (speed stays at slider). Timestretch OFF
+                // → note scales speed and pitch tracks speed.
+                if (p.timestretch)
+                {
+                    vp.speed = p.speed;
+                    vp.pitch = p.pitch * ev.note_ratio;
+                }
+                else
+                {
+                    vp.speed = p.speed * ev.note_ratio;
+                    vp.pitch = vp.speed;
+                }
                 voice_live_params_[slot] = vp;
-                v->trigger(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_, /*gated=*/true);
+                v->trigger_adsr_gated(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
                 voice_midi_seq_[slot] = ev.midi_seq;
             }
             // else: all voices busy, stealing off — drop.
@@ -226,31 +251,15 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
         }
     }
 
-    // --- envelope_trigger: see header for the full behaviour matrix ---
+    // --- envelope_trigger button: always spawns a new AR voice. ---
     if (p.envelope_trigger)
     {
-        if (p.envelope_sync)
+        const int preferred = voice_selected ? selected_voice : -1;
+        if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
         {
-            // sync ON: (re)trigger a voice. With voice_selected the allocator
-            // returns &voices_[selected_voice] unconditionally — retriggers
-            // that slot whether active or not. Without selection it picks a
-            // fresh slot just like p.play.
-            const int preferred = voice_selected ? selected_voice : -1;
-            if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
-            {
-                const size_t slot = static_cast<size_t>(v - &voices_[0]);
-                voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
-                v->trigger(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
-            }
-        }
-        else
-        {
-            // sync OFF: only retrigger the envelope on the selected voice
-            // (if active) or the newest active voice.
-            Voice* target = voice_selected
-                ? (voices_[selected_voice].is_active() ? &voices_[selected_voice] : nullptr)
-                : find_newest_active(voices_);
-            if (target) target->trigger_envelope();
+            const size_t slot = static_cast<size_t>(v - &voices_[0]);
+            voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
+            v->trigger_ar(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
         }
     }
 
@@ -261,7 +270,7 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
             voices_[vi].set_live_params(voice_live_params_[vi], buffer_size, sample_rate_);
     }
 
-    // --- zero output ---
+    // --- zero output, then sum each voice voice-major (cheaper iteration). ---
     for (size_t i = 0; i < block_size; ++i)
     {
         output.audio.channel(0)[i] = 0.0f;
@@ -271,58 +280,17 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     const auto& left_buffer  = input.buffer.sample[0];
     const auto& right_buffer = input.buffer.sample[1];
 
-    // --- sample-major: process all voices per sample, then run the comparator
-    // so it sees the just-computed phase/env_phase of the source voice. ---
-    for (size_t i = 0; i < block_size; ++i)
+    for (size_t vi = 0; vi < voices_.size(); ++vi)
     {
-        for (size_t vi = 0; vi < voices_.size(); ++vi)
+        auto& v = voices_[vi];
+        if (!v.is_active()) continue;
+        for (size_t i = 0; i < block_size; ++i)
         {
-            auto& v = voices_[vi];
-            if (!v.is_active()) continue;
+            if (!v.is_active()) break;
             const auto f = v.process(left_buffer, right_buffer);
             output.audio.channel(0)[i] += f.l;
             output.audio.channel(1)[i] += f.r;
         }
-
-        // Comparator: source = selected voice (if active) else newest active.
-        Voice* src = (voice_selected && voices_[selected_voice].is_active())
-            ? &voices_[selected_voice]
-            : find_newest_active(voices_);
-
-        if (src && p.comp_threshold > 0.f)
-        {
-            // Bucket = how many whole thresholds fit into the current phase.
-            // Fires every time we step up to a new bucket. When the source
-            // wraps (phase 1→0) the bucket index drops, no fire — the next
-            // upward step (at +threshold past 0) fires instead.
-            float source_val = 0.0f;
-            if(p.comp_source == ComparatorSource::LoopPhase)
-            {
-                source_val = src->phase();
-            }
-            else if (p.comp_source == ComparatorSource::EnvPhase)
-            {
-                source_val = src->env_phase();
-            }
-            else
-            {
-                source_val = 0.0f;
-            }
-
-            const int   bucket     = static_cast<int>(source_val / p.comp_threshold);
-            if (bucket > comp_prev_bucket_)
-            {
-                if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, -1))
-                {
-                    const size_t slot = static_cast<size_t>(v - &voices_[0]);
-                    voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
-                    v->trigger(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
-                    v->set_live_params(voice_live_params_[slot], buffer_size, sample_rate_);
-                }
-            }
-            comp_prev_bucket_ = bucket;
-        }
-        // No source voice (or threshold=0): leave comp_prev_bucket_ as-is.
     }
 
     // --- publish display state ---

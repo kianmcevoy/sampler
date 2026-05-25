@@ -13,6 +13,9 @@
  * (top-left in design pixels); its waveform, cursors and start/end markers
  * scale with these bounds. Then add controls. Every `add_` method takes:
  *
+ * - A `panel` string naming which user-facing panel hosts this control
+ *   (e.g. "main", "modulation"). MainComponent's tab strip shows one tab
+ *   per declared panel name and swaps which panel is visible underneath.
  * - An `identifier` string, used to read the control in `ParameterInterface`,
  *   to save state (must be a valid XML tag), and as the OSC address.
  * - A `label` string used as the on-screen label.
@@ -23,19 +26,19 @@
  * at y = 45..195. Use `set_display` to move/resize it; place controls so they
  * don't overlap.
  *
- * Available controls:
+ * Available controls (each takes `panel` as its first argument):
  *
- * `add_slider(id, label, x, y[, w, h])`
+ * `add_slider(panel, id, label, x, y[, w, h])`
  *      Continuous-value knob, range [0:1] by default — adjustable at runtime
  *      in the Settings pane.
- * `add_slider(id, label, min, max, default, x, y[, w, h])`
+ * `add_slider(panel, id, label, min, max, default, x, y[, w, h])`
  *      As above but with an explicit displayed range and default.
- * `add_button(id, label, x, y[, w, h])`
+ * `add_button(panel, id, label, x, y[, w, h])`
  *      Latching toggle switch.
- * `add_trigger(id, label, x, y[, w, h])`
+ * `add_trigger(panel, id, label, x, y[, w, h])`
  *      Momentary trigger button. Reads as `false` in every block except the
  *      one immediately after a click, when it reads `true`.
- * `add_dropdown(id, label, options, x, y[, w, h])`
+ * `add_dropdown(panel, id, label, options, x, y[, w, h])`
  *      Multiple-choice menu. The control value in `ParameterInterface` is the
  *      index of the selected option.
  *
@@ -59,49 +62,62 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.set_display(450.f, 45.f, 700.f, 150.f);
 
 	//transport + loop
-	controls.add_trigger("load_sample", "Load Sample", 20.f, 215.f);
-	controls.add_trigger("play",        "Play",        140.f, 215.f);
-	controls.add_trigger("stop",        "Stop",        260.f, 215.f);
-	controls.add_button ("loop",        "Loop",        380.f, 215.f);
+	controls.add_trigger("main", "load_sample", "Load Sample", 20.f, 215.f);
+	controls.add_trigger("main", "play",        "Play",        140.f, 215.f);
+	controls.add_trigger("main", "stop",        "Stop",        260.f, 215.f);
+	controls.add_button ("main", "loop",        "Loop",        380.f, 215.f);
+    controls.add_button ("main", "timestretch", "Time Stretch",500.f, 215.f);
 
 	//playback parameters (start/length fractions of sample; speed bipolar [-4,+4])
-	controls.add_slider("start",  "Start",   0.f,  1.f, 0.f,  20.f, 335.f);
-	controls.add_slider("length", "Length",  0.f,  1.f, 1.f,  140.f, 335.f);
-	controls.add_slider("speed",  "Speed",  -4.f,  4.f, 0.f,  260.f, 335.f);
-	controls.add_slider("level",  "Level",   0.f,  1.f, 1.f,  380.f, 335.f);
-	controls.add_slider("pan",    "Pan",     0.f,  1.f, 0.5f, 500.f, 335.f);
+	controls.add_slider("main", "start",  "Start",   0.f,  1.f, 0.f,  20.f, 335.f);
+	controls.add_slider("main", "length", "Length",  0.f,  1.f, 1.f,  140.f, 335.f);
+	controls.add_slider("main", "speed",  "Speed",  -4.f,  4.f, 0.f,  260.f, 335.f);
+	controls.add_slider("main", "level",  "Level",   0.f,  1.f, 1.f,  380.f, 335.f);
+	controls.add_slider("main", "pan",    "Pan",     0.f,  1.f, 0.5f, 500.f, 335.f);
 
 	//per-launch random deviation
-	controls.add_slider("random_start",  "Random Start",  0.f, 1.f, 0.f, 20.f, 455.f);
-	controls.add_slider("random_length", "Random Length", 0.f, 1.f, 0.f, 140.f, 455.f);
-    controls.add_slider("random_speed",  "Random Speed",  0.f, 1.f, 0.f,  260.f, 455.f);
-	controls.add_slider("random_level",  "Random Level",  0.f, 1.f, 0.f, 380.f, 455.f);
-	controls.add_slider("random_pan",    "Random Pan",    0.f, 1.f, 0.f, 500.f, 455.f);
+	controls.add_slider("modulation", "random_start",  "Random Start",  0.f, 1.f, 0.f,  20.f, 455.f);
+	controls.add_slider("modulation", "random_length", "Random Length", 0.f, 1.f, 0.f, 140.f, 455.f);
+    controls.add_slider("modulation", "random_speed",  "Random Speed",  0.f, 1.f, 0.f, 260.f, 455.f);
+	controls.add_slider("modulation", "random_level",  "Random Level",  0.f, 1.f, 0.f, 380.f, 455.f);
+	controls.add_slider("modulation", "random_pan",    "Random Pan",    0.f, 1.f, 0.f, 500.f, 455.f);
 
 	//envelope routing depths, bipolar [-1, +1]
-	controls.add_slider("envelope_start",  "Envelope Start",  -1.f, 1.f, 0.f, 20.f, 575.f);
-	controls.add_slider("envelope_length", "Envelope Length", -1.f, 1.f, 0.f, 140.f, 575.f);
-    controls.add_slider("envelope_speed",  "Envelope Speed",  -1.f, 1.f, 0.f, 260.f, 575.f);
-	controls.add_slider("envelope_level",  "Envelope Level",  -1.f, 1.f, 0.f, 380.f, 575.f);
-	controls.add_slider("envelope_pan",    "Envelope Pan",    -1.f, 1.f, 0.f, 500.f, 575.f);
+	controls.add_slider("modulation", "envelope_start",  "Envelope Start",  -1.f, 1.f, 0.f,  20.f, 575.f);
+	controls.add_slider("modulation", "envelope_length", "Envelope Length", -1.f, 1.f, 0.f, 140.f, 575.f);
+    controls.add_slider("modulation", "envelope_speed",  "Envelope Speed",  -1.f, 1.f, 0.f, 260.f, 575.f);
+	controls.add_slider("modulation", "envelope_level",  "Envelope Level",  -1.f, 1.f, 1.f, 380.f, 575.f);
+	controls.add_slider("modulation", "envelope_pan",    "Envelope Pan",    -1.f, 1.f, 0.f, 500.f, 575.f);
 
     //playhead phase routing
-    controls.add_slider("phase_start", "Phase Start", -1.f, 1.f, 0.f, 20.f, 695.f);
-    controls.add_slider("phase_length", "Phase Length", -1.f, 1.f, 0.f, 140.f, 695.f);
-    controls.add_slider("phase_speed", "Phase Speed", -1.f, 1.f, 0.f, 260.f, 695.f);
-    controls.add_slider("phase_level", "Phase Level", -1.f, 1.f, 0.f, 380.f, 695.f);
-    controls.add_slider("phase_pan", "Phase Pan", -1.f, 1.f, 0.f, 500.f, 695.f);
+    controls.add_slider("modulation", "phase_start",  "Phase Start",  -1.f, 1.f, 0.f,  20.f, 695.f);
+    controls.add_slider("modulation", "phase_length", "Phase Length", -1.f, 1.f, 0.f, 140.f, 695.f);
+    controls.add_slider("modulation", "phase_speed",  "Phase Speed",  -1.f, 1.f, 0.f, 260.f, 695.f);
+    controls.add_slider("modulation", "phase_level",  "Phase Level",  -1.f, 1.f, 0.f, 380.f, 695.f);
+    controls.add_slider("modulation", "phase_pan",    "Phase Pan",    -1.f, 1.f, 0.f, 500.f, 695.f);
 
-	//envelope controls
-    controls.add_button("loop_envelope",  "Loop Envelope", 740.f, 215.f);
-	controls.add_button("voice_stealing", "Steal/Protect", 860.f, 215.f);
-	controls.add_button("envelope_sync",  "Sync Envelope", 980.f, 215.f);
-    controls.add_trigger("envelope_trigger", "Trigger Envelope", 620.f, 215.f);
-	controls.add_slider("time",   "Time", 0.f, 1.f, 1.f,  740.f, 335.f);
-	controls.add_slider("skew",   "Skew", 0.f, 1.f, 0.5f, 860.f, 335.f);
-	controls.add_slider("shape",  "Shape", 0.f, 1.f, 0.f, 980.f, 335.f);
-    controls.add_dropdown("comp_source", "Comp Source", {"None", "Loop Phase", "Env Phase"}, 1100.f, 215.f);
-    controls.add_slider("comp_threshold", "Comp Threshold", 0.f, 1.f, 0.5f, 1100.f, 335.f);
+    //granular per-voice (pitch decoupled from speed; window-shape morphs
+    //rect→down-ramp→cos→up-ramp; window_size in seconds; width = number of
+    //grains 1..8). With width=1, window_size doubles as the loop-boundary
+    //crossfade length and window_shape selects the crossfade ramp curve.
+    controls.add_slider("main", "pitch",        "Pitch",        -4.f, 4.f, 1.f,   20.f, 455.f);
+    controls.add_slider("main", "window_size",  "Window Size",   0.1f, 1.f, 0.5f, 140.f, 455.f);
+    controls.add_slider("main", "window_shape", "Window Shape",  0.f,  1.f, 0.f,  260.f, 455.f);
+    controls.add_slider("main", "width",        "Width",         1.f,  8.f, 1.f,  380.f, 455.f);
+
+    //granular per-launch random (lives alongside the granular controls)
+    controls.add_slider("modulation", "random_pitch",        "Random Pitch",        0.f, 1.f, 0.f, 620.f, 455.f);
+    controls.add_slider("modulation", "random_window_size",  "Random Window Size",  0.f, 1.f, 0.f, 740.f, 455.f);
+    controls.add_slider("modulation", "random_window_shape", "Random Window Shape", 0.f, 1.f, 0.f, 860.f, 455.f);
+    controls.add_slider("modulation", "random_width",        "Random Width",        0.f, 1.f, 0.f, 980.f, 455.f);
+
+	//envelope controls (ADSR)
+	controls.add_button ("main", "voice_stealing",    "Voice Stealing",    1220.f,  215.f);
+    controls.add_trigger("main", "envelope_trigger", "Trigger Envelope",  1220.f,  335.f);
+	controls.add_slider ("main", "attack",  "Attack",  0.f, 1.f, 0.01f,  740.f,  335.f);
+	controls.add_slider ("main", "decay",   "Decay",   0.f, 1.f, 0.1f,   860.f,  335.f);
+	controls.add_slider ("main", "sustain", "Sustain", 0.f, 1.f, 0.8f,   980.f,  335.f);
+	controls.add_slider ("main", "release", "Release", 0.f, 1.f, 0.3f,  1100.f,  335.f);
 
     //voice buttons
     static constexpr std::array<const char*, max_voices> voice_button_ids = {
@@ -114,12 +130,12 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     for (size_t i = 0; i < max_voices; ++i)
     {
         controls.add_voice_button(
-            voice_button_ids[i], voice_button_labels[i], static_cast<int>(i),
+            "main", voice_button_ids[i], voice_button_labels[i], static_cast<int>(i),
             620.f + 120.f * static_cast<float>(i), 695.f);
     }
 
     //global button
-    controls.add_button("auto", "Auto", 1340.f, 215.f);
-    controls.add_button("global", "Global", 1460.f, 215.f);
+    controls.add_button("main", "auto",   "Auto",   1340.f, 215.f);
+    controls.add_button("main", "global", "Global", 1460.f, 215.f);
 
 }

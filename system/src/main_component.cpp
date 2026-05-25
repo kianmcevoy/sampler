@@ -32,7 +32,12 @@ MainComponent::MainComponent(EngineAudioProcessor& processor_, EngineAudioProces
     editor{editor_},
     font_lifetime_manager(igui::initialise_instruo_font(AssetManager::get_resource_file("gui/fonts/elza-round-variable-light.otf"))),
     main_panel(processor_),
+    modulation_panel(processor_),
     settings_panel(processor_),
+    main_tab_button(new igui::InstruoLedTextButtonElement(
+        "Main", igui::InstruoLedTextButtonElement::IndicationStyle::Outline)),
+    modulation_tab_button(new igui::InstruoLedTextButtonElement(
+        "Modulation", igui::InstruoLedTextButtonElement::IndicationStyle::Outline)),
     current_window_full_size{std::cref(this->window_full_size.standard)},
     window_scale{processor_.get_gui_scale_value_ref()},
     bounds_manager(*this),
@@ -43,9 +48,15 @@ MainComponent::MainComponent(EngineAudioProcessor& processor_, EngineAudioProces
         [this](const VoiceLiveParams& p) { this->apply_params_to_juce(p); })
 {
     this->addAndMakeVisible(this->main_panel);
+    this->addChildComponent(this->modulation_panel);
     this->addChildComponent(this->settings_panel);
 
     this->hide_settings_panel();
+
+    this->addAndMakeVisible(this->main_tab_button);
+    this->addAndMakeVisible(this->modulation_tab_button);
+    this->main_tab_button.set_on_click_function([this]() { this->set_active_panel("main"); });
+    this->modulation_tab_button.set_on_click_function([this]() { this->set_active_panel("modulation"); });
 
     this->editor.setConstrainer(&this->bounds_manager);
     this->editor.setResizable(false, true);
@@ -59,6 +70,9 @@ MainComponent::MainComponent(EngineAudioProcessor& processor_, EngineAudioProces
     // Initial mode is Auto: light up the Auto button, leave Global off.
     this->set_bool_juce("auto",   true);
     this->set_bool_juce("global", false);
+
+    // Initial panel selection.
+    this->set_active_panel("main");
 }
 
 MainComponent::~MainComponent()
@@ -87,7 +101,27 @@ void MainComponent::resized()
 
     this->settings_panel.setBounds(this->scale_to_fit(juce::Rectangle<float>(design_panel_width + panel_spacer_size, 0, settings_pane_width, this->current_window_full_size.get().height)).toNearestIntEdges());
 
-    this->main_panel.setBounds(this->scale_to_fit(juce::Rectangle<float>(0, 0, design_panel_width, this->window_full_size.standard.height)).toNearestIntEdges());
+    // Both project panels share the same canvas footprint; visibility (one at
+    // a time) is governed by set_active_panel().
+    const auto project_panel_bounds = this->scale_to_fit(
+        juce::Rectangle<float>(0, 0, design_panel_width, this->window_full_size.standard.height)
+    ).toNearestIntEdges();
+    this->main_panel.setBounds(project_panel_bounds);
+    this->modulation_panel.setBounds(project_panel_bounds);
+
+    // Tab buttons sit in the top-left of the window, clear of the y=215
+    // control row and the settings cog (top-right corner).
+    this->main_tab_button.setBounds      (this->scale_to_fit(juce::Rectangle<float>( 20.f, 8.f,  90.f, 28.f)).toNearestIntEdges());
+    this->modulation_tab_button.setBounds(this->scale_to_fit(juce::Rectangle<float>(120.f, 8.f, 140.f, 28.f)).toNearestIntEdges());
+}
+
+void MainComponent::set_active_panel(const juce::String& name)
+{
+    this->active_panel_ = name;
+    this->main_panel.setVisible      (name == "main");
+    this->modulation_panel.setVisible(name == "modulation");
+    this->main_tab_button.view_led().brightness().set      (name == "main"       ? 1.f : 0.2f);
+    this->modulation_tab_button.view_led().brightness().set(name == "modulation" ? 1.f : 0.2f);
 }
 
 void MainComponent::parentHierarchyChanged()
@@ -126,6 +160,12 @@ void MainComponent::timerCallback()
 void MainComponent::on_voice_button_clicked(size_t voice_index)
 {
     this->mode_controller_.on_voice_button_clicked(voice_index);
+    // Sync the auto/global JUCE params to the new mode IMMEDIATELY so the
+    // next timer tick doesn't see stale state (e.g. auto still true while we
+    // just entered Voice mode) and misinterpret it as a user click on Auto.
+    const bool in_auto = (this->mode_controller_.mode() == ModeController::Mode::Auto);
+    this->set_bool_juce("auto",   in_auto);
+    this->set_bool_juce("global", this->mode_controller_.global_on());
     this->refresh_voice_button_visuals();
 }
 
