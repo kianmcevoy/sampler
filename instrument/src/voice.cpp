@@ -20,43 +20,134 @@ namespace
         return lut;
     }
 
-    constexpr float kTwoPi = 6.28318530717958647692f;
-    constexpr float kPi    = 3.14159265358979323846f;
+    constexpr float kPi = 3.14159265358979323846f;
 
-    // 4-way morphed grain window. `shape`∈[0,1] interpolates through:
-    //   0.00 → rectangle (constant 1)
-    //   0.33 → down-ramp  (1 → 0)
-    //   0.66 → cosine     (Hann: 0 → 1 → 0)
-    //   1.00 → up-ramp    (0 → 1)
-    // `phase`∈[0,1) is the grain's progress through its window.
-    inline float window_value(float shape, float phase)
+    // --- Kaiser window LUTs ---
+    //
+    // 5 precomputed Kaiser windows at β ∈ {0, 3, 6, 10, 14}. The shape slider
+    // selects two adjacent entries to interpolate between. β=0 is rectangular
+    // (constant 1), β=6 is roughly Hann-equivalent (canonical C-OLA), β=14 is
+    // very smooth / heavily-tapered. Each window is symmetric on [0, 1] with
+    // phase=0 and phase=1 mapping to the window edges.
+
+    constexpr int    kKaiserLutSize = 1024;
+    constexpr size_t kKaiserCount   = 5;
+    constexpr float  kKaiserBetas[kKaiserCount] = { 0.f, 3.f, 6.f, 10.f, 14.f };
+
+    // Modified Bessel I0 via the canonical power-series expansion. Converges
+    // in ~20 terms for x ≤ 14; used only at LUT-generation time.
+    inline double bessel_i0(double x)
     {
-        const float rect = 1.f;
-        const float down = 1.f - phase;
-        const float cosw = 0.5f - 0.5f * std::cos(kTwoPi * phase);
-        const float up   = phase;
-
-        const float s = idsp::clamp(shape, 0.f, 1.f) * 3.f;
-        int seg = static_cast<int>(s);
-        if (seg < 0) seg = 0;
-        if (seg > 2) seg = 2;
-        const float frac = s - static_cast<float>(seg);
-        const float a = (seg == 0) ? rect : (seg == 1) ? down : cosw;
-        const float b = (seg == 0) ? down : (seg == 1) ? cosw : up;
-        return (1.f - frac) * a + frac * b;
+        const double y = x * 0.5;
+        double term = 1.0;
+        double sum  = 1.0;
+        for (int k = 1; k < 32; ++k)
+        {
+            term *= (y / static_cast<double>(k));
+            const double t2 = term * term;
+            sum += t2;
+            if (t2 < 1e-18 * sum) break;
+        }
+        return sum;
     }
 
-    // Crossfade ramp curve used in width=1 mode. `t`∈[0,1] is fade phase
-    // (0 = silent, 1 = full). At `shape`≈0 it's a hard step at the midpoint
-    // (i.e. no real crossfade — the boundary just hard-cuts). Higher shape
-    // values morph from linear ramp into an equal-power-ish cosine ramp.
-    inline float ramp_curve(float shape, float t)
+    inline double kaiser_value(double phase, double beta)
     {
-        if (shape < 0.001f) return (t >= 0.5f) ? 1.f : 0.f;
-        const float linear = t;
-        const float cosw   = 0.5f - 0.5f * std::cos(kPi * t);  // 0→1, raised cosine
-        const float blend  = idsp::clamp(shape, 0.f, 1.f);
-        return (1.f - blend) * linear + blend * cosw;
+        // Standard Kaiser: w(n) = I0(β·√(1 − (2n/(N-1) − 1)²)) / I0(β)
+        if (beta <= 0.0) return 1.0;
+        const double x = 2.0 * phase - 1.0;          // [-1, +1]
+        const double r2 = 1.0 - x * x;
+        if (r2 < 0.0) return 0.0;
+        return bessel_i0(beta * std::sqrt(r2)) / bessel_i0(beta);
+    }
+
+    using KaiserLut = idsp::LookupTable<float, kKaiserLutSize>;
+
+    // Build a single Kaiser LUT for the given β. Returned by value into a
+    // static array; pointer/index lookups are cheap.
+    inline std::array<KaiserLut, kKaiserCount> build_kaiser_luts()
+    {
+        std::array<KaiserLut, kKaiserCount> tables{
+            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 0.0));  }},
+            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 3.0));  }},
+            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 6.0));  }},
+            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 10.0)); }},
+            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 14.0)); }},
+        };
+        return tables;
+    }
+
+    const std::array<KaiserLut, kKaiserCount>& kaiser_luts()
+    {
+        static const std::array<KaiserLut, kKaiserCount> tables = build_kaiser_luts();
+        return tables;
+    }
+
+    // Find the two adjacent kaiser_betas entries bracketing `beta` and the
+    // linear blend factor between them. Endpoints clamp.
+    inline void select_kaiser_luts(float beta, int& a, int& b, float& blend)
+    {
+        if (beta <= kKaiserBetas[0])             { a = b = 0; blend = 0.f; return; }
+        if (beta >= kKaiserBetas[kKaiserCount-1]){ a = b = kKaiserCount-1; blend = 0.f; return; }
+        for (size_t i = 0; i + 1 < kKaiserCount; ++i)
+        {
+            if (beta <= kKaiserBetas[i+1])
+            {
+                a = static_cast<int>(i);
+                b = static_cast<int>(i + 1);
+                blend = (beta - kKaiserBetas[i]) / (kKaiserBetas[i+1] - kKaiserBetas[i]);
+                return;
+            }
+        }
+        a = b = kKaiserCount - 1; blend = 0.f;
+    }
+
+    // Read the (a, b, blend) Kaiser combination at `phase`∈[0,1].
+    inline float read_kaiser_window(int a, int b, float blend, float phase)
+    {
+        const auto& luts = kaiser_luts();
+        const float pc = idsp::clamp(phase, 0.f, 1.f);
+        const float va = luts[a].read(pc);
+        const float vb = luts[b].read(pc);
+        return (1.f - blend) * va + blend * vb;
+    }
+
+    // Minimum overlap count for C-OLA reconstruction at the chosen β.
+    // Rule of thumb: rect (β≈0) needs no overlap (1), Hann-like (β≈6) needs 2,
+    // Blackman-like (β≈8-10) needs 3, very smooth (β≈14) needs 4+.
+    inline int cola_overlap_for_beta(float beta)
+    {
+        if (beta < 1.5f)  return 1;
+        if (beta < 4.5f)  return 2;
+        if (beta < 8.5f)  return 3;
+        return 4;
+    }
+
+    // xorshift32 — local rng for per-grain jitter.
+    inline uint32_t xorshift32(uint32_t& s)
+    {
+        s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+        return s;
+    }
+    inline float bipolar_uniform(uint32_t& s)
+    {
+        return static_cast<float>(xorshift32(s) >> 8) * (1.f / 8388608.f) - 1.f;
+    }
+
+    // Per-grain jitter curve. depth ∈ [0,1] controls the magnitude:
+    //   0.0  → 0
+    //   0.5  → small structured decorrelation
+    //   1.0  → full spray
+    // Curve = depth × structured + depth^4 × (spray − structured), uniformly
+    // distributed in ±amount.
+    inline float per_grain_jitter(uint32_t& rng, float depth, float spray_range)
+    {
+        const float d = idsp::clamp(depth, 0.f, 1.f);
+        constexpr float kStructured = 0.05f;
+        const float structured_amt = d * kStructured * spray_range;
+        const float spray_amt      = d * d * d * d * (1.f - kStructured) * spray_range;
+        const float amount = structured_amt + spray_amt;
+        return bipolar_uniform(rng) * amount;
     }
 
     // Equal-power pan via the shared LUT. ~6 fmadds, no sqrt/sin/cos at runtime.
@@ -94,26 +185,28 @@ void Voice::set_live_params(const VoiceLiveParams& p, size_t buffer_size, float 
     end_pos_   = end_pos;
     length_    = loop_len;
 
-    // Speed and direction both follow the slider live. `forward_` is only
-    // "locked at trigger" with respect to envelope/phase modulation — those
-    // can't flip direction, but a deliberate slider edit can.
-    forward_    = (p.speed >= 0.f);
-    base_speed_ = p.speed;
+    // Speed = slider value × (note-ratio multiplier when timestretch is OFF,
+    // 1× otherwise). The note-ratio multiplier folds the MIDI per-note pitch
+    // shift into the playback rate for non-timestretch voices; for timestretch
+    // voices the note pitch is applied to pitch_deviation below instead.
+    // `forward_` follows the live sign.
+    const float speed_input = p.speed * (p.timestretch ? 1.f
+                                                       : std::exp2(midi_octave_offset_));
+    forward_    = (speed_input >= 0.f);
+    base_speed_ = speed_input;
 
     base_level_ = p.level;
     base_pan_   = p.pan;
     compute_pan_gains_lut(p.pan, base_pan_l_, base_pan_r_);
-    sample_loops_ = p.loop;
+    // sample_loops_ is intrinsic to the trigger type now (play/MIDI → true,
+    // envelope_trigger AR → false); each trigger_* sets it before calling
+    // this function. Don't overwrite it here.
 
-    // Envelope durations:
-    //   loop ON  → absolute time (0..5 s) — sample loops underneath.
-    //   loop OFF → fraction of the playback range — so the envelope fits
-    //              the actual length of audio we'll play through.
+    // Envelope durations are always 0..5 s, scaled by sample_rate. This is
+    // independent of loop state — A/D/R sliders always map to seconds.
     const auto resolve_dur = [&](float slider_value) -> size_t
     {
-        const float scale = sample_loops_
-            ? 5.f * sample_rate
-            : static_cast<float>(loop_len);
+        const float scale = 5.f * sample_rate;
         const auto raw = static_cast<size_t>(idsp::clamp(slider_value, 0.f, 1.f) * scale);
         return raw == 0 ? 1 : raw;
     };
@@ -135,15 +228,104 @@ void Voice::set_live_params(const VoiceLiveParams& p, size_t buffer_size, float 
     depth_phase_level_  = p.phase_level;
     depth_phase_pan_    = p.phase_pan;
 
-    // Granular params. Pitch direction is independent of speed direction —
-    // you can read grains backwards through a forward-playing voice. Window
-    // size/shape/width are picked up live; running grains keep their existing
-    // phase_inc until they finish (only newly-spawned grains see the new size).
-    base_pitch_   = p.pitch;
-    window_size_  = idsp::clamp(p.window_size, 0.1f, 1.f);
-    window_shape_ = idsp::clamp(p.window_shape, 0.f, 1.f);
-    width_        = idsp::clamp(p.width, 1.f, 8.f);
-    sample_rate_  = sample_rate;
+    // --- Granular: copy deviations + random depths, then derive auto values ---
+    pitch_deviation_   = idsp::clamp(p.pitch_deviation,  -2.f, 2.f);
+    size_deviation_    = idsp::clamp(p.size_deviation,   -1.f, 1.f);
+    shape_deviation_   = idsp::clamp(p.shape_deviation,  -1.f, 1.f);
+    grains_deviation_  = idsp::clamp(p.grains_deviation, -1.f, 1.f);
+    timestretch_       = p.timestretch;
+    random_pitch_      = idsp::clamp(p.random_pitch,      0.f, 1.f);
+    random_size_       = idsp::clamp(p.random_size,       0.f, 1.f);
+    random_shape_      = idsp::clamp(p.random_shape,      0.f, 1.f);
+    random_grains_     = idsp::clamp(p.random_grains,     0.f, 1.f);
+    random_position_   = idsp::clamp(p.random_position,   0.f, 1.f);
+    random_level_      = idsp::clamp(p.random_level,      0.f, 1.f);
+    random_pan_        = idsp::clamp(p.random_pan,        0.f, 1.f);
+    sample_rate_       = sample_rate;
+
+    // 1. Pitch ratio. When timestretch is OFF, pitch is forced to 1 (no shift)
+    //    and the voice plays as a single playhead (loop_crossfade_mode_ below).
+    //    When ON, the slider's pitch_deviation sums with the MIDI per-note
+    //    pitch offset stored on this voice. `forward_` carries playback direction.
+    const float effective_pitch_oct = timestretch_
+        ? (pitch_deviation_ + midi_octave_offset_)
+        : 0.f;
+    const float pitch_mag = std::exp2(effective_pitch_oct);
+    pitch_ratio_ = forward_ ? pitch_mag : -pitch_mag;
+
+    // 2. Auto grain length in samples:
+    //      N_auto_s = 40 ms baseline
+    //               + 30 ms per octave of pitch shift
+    //               + 20 ms when speed drops below 1× (slow playback smears most)
+    //    size_deviation log-scales it: ±1 ⇒ ×0.25..×4, clamped to [20, 200] ms.
+    const float n_auto_s = 0.040f
+        + 0.030f * std::abs(effective_pitch_oct)
+        + 0.020f * std::max(0.f, 1.f - std::abs(base_speed_));
+    const float size_scale = std::exp2(size_deviation_ * 2.f);
+    const float n_eff_s    = idsp::clamp(n_auto_s * size_scale, 0.020f, 0.200f);
+    n_eff_samples_ = std::max(1.f, n_eff_s * sample_rate_);
+
+    // 3. Kaiser β from shape_deviation: -1 → 0, 0 → 6, +1 → 14 (piecewise linear).
+    kaiser_beta_ = (shape_deviation_ < 0.f)
+        ? (6.f + shape_deviation_ * 6.f)
+        : (6.f + shape_deviation_ * 8.f);
+
+    // 4. Grain count from grains_deviation. -1 → 1 grain, 0 → C-OLA minimum
+    //    for the chosen β (2/3/4), +1 → 8 grains. Piecewise linear.
+    const int auto_overlap = cola_overlap_for_beta(kaiser_beta_);
+    int eff;
+    if (grains_deviation_ <= 0.f)
+    {
+        const float t = grains_deviation_ + 1.f;  // [0, 1]
+        eff = static_cast<int>(std::lround(1.f + t * static_cast<float>(auto_overlap - 1)));
+    }
+    else
+    {
+        eff = static_cast<int>(std::lround(
+            static_cast<float>(auto_overlap)
+                + grains_deviation_ * static_cast<float>(8 - auto_overlap)));
+    }
+    overlap_eff_ = idsp::clamp(eff, 1, static_cast<int>(grains_.size()));
+
+    // 5. Loop-crossfade mode is now selected by timestretch=false (single
+    //    playhead at original pitch). Granular C-OLA only runs when
+    //    timestretch is ON.
+    loop_crossfade_mode_ = !timestretch_;
+}
+
+float Voice::loop_position_fraction() const
+{
+    if (length_ == 0) return 0.f;
+    const float rel = (position_ - static_cast<float>(start_pos_))
+                    / static_cast<float>(length_);
+    return idsp::clamp(rel, 0.f, 1.f);
+}
+
+void Voice::set_loop_position_fraction(float frac)
+{
+    if (length_ == 0) return;
+    const float f = idsp::clamp(frac, 0.f, 1.f);
+    position_ = static_cast<float>(start_pos_) + f * static_cast<float>(length_);
+
+    if (loop_crossfade_mode_)
+    {
+        // Single-playhead mode: teleport the Body grain's read pointer so the
+        // jump is immediate. (There's no overlap to mask the change.) If a
+        // boundary crossfade is in progress, leave the FadeIn/FadeOut pair
+        // alone — they'll resolve normally.
+        for (auto& g : grains_)
+        {
+            if (g.active && g.role == Grain::Role::Body) g.read_pos = position_;
+        }
+    }
+    // C-OLA mode: update `position_` and otherwise leave the cluster running.
+    // Existing grains finish their windows from the old read positions; new
+    // grains spawn at the updated `position_` on the next synth-hop. The
+    // overlapping windows produce a smooth crossfade between the old and
+    // scrubbed positions instead of cutting on every block during a continuous
+    // drag (the old behaviour of `reset_grains()` here killed the cluster
+    // every block, producing the "stuttering grains while scrubbing, then a
+    // burst on release" artifact).
 }
 
 // Lifetime progress in [0, 1]: 0 just after trigger, 1 about to hit the end.
@@ -171,16 +353,91 @@ void Voice::reset_grains()
     for (auto& g : grains_) g = Grain{};
 }
 
-void Voice::spawn_grain(size_t slot, Grain::Role role, float read_pos, float phase_inc)
+void Voice::spawn_grain_loop_xfade(size_t slot, Grain::Role role, float read_pos, float phase_inc)
 {
     if (slot >= grains_.size()) return;
     auto& g = grains_[slot];
-    g.active       = true;
-    g.role         = role;
-    g.read_pos     = read_pos;
-    g.phase        = 0.f;
-    g.phase_inc    = phase_inc;
-    g.spawned_next = false;
+    g.active     = true;
+    g.role       = role;
+    g.read_pos   = read_pos;
+    g.pitch_ratio = forward_ ? std::abs(pitch_ratio_) : -std::abs(pitch_ratio_);
+    g.phase      = 0.f;
+    g.phase_inc  = phase_inc;
+    g.win_lut_a  = 0;
+    g.win_lut_b  = 0;
+    g.win_blend  = 0.f;
+}
+
+void Voice::spawn_cola_grain(size_t slot, float base_read_pos)
+{
+    if (slot >= grains_.size()) return;
+    auto& g = grains_[slot];
+    g.active = true;
+    g.role   = Grain::Role::Body;
+    g.phase  = 0.f;
+
+    // Per-grain position jitter — spray range = one grain length, so at
+    // depth=1 each grain can start anywhere within ±N samples of the
+    // analysis pointer; at depth=0.5 it's a few-percent decorrelation.
+    // Result is wrapped into the loop region by wrap_position.
+    const float pos_jit = per_grain_jitter(grain_rng_, random_position_, n_eff_samples_);
+    const float start_f = static_cast<float>(start_pos_);
+    const float end_f   = static_cast<float>(end_pos_);
+    g.read_pos = wrap_position(base_read_pos + pos_jit, start_f, end_f);
+
+    // Per-grain pitch jitter, up to ±1 octave at depth=1. The voice's
+    // `pitch_ratio_` already incorporates both the slider pitch_deviation
+    // and the MIDI per-note octave offset (computed in set_live_params), so
+    // we multiply that base by the jitter to get the per-grain rate.
+    const float pitch_jit = per_grain_jitter(grain_rng_, random_pitch_, 1.f);
+    const float p_ratio   = std::abs(pitch_ratio_) * std::exp2(pitch_jit);
+    g.pitch_ratio = forward_ ? p_ratio : -p_ratio;
+
+    // Per-grain size jitter scales N: ±1 in exp2 → ×0.5..×2 at depth=1.
+    const float size_jit   = per_grain_jitter(grain_rng_, random_size_, 1.f);
+    const float n_samples  = std::max(1.f, n_eff_samples_ * std::exp2(size_jit));
+    g.phase_inc = 1.f / n_samples;
+
+    // Per-grain shape jitter shifts Kaiser β within [0, 14].
+    const float shape_jit  = per_grain_jitter(grain_rng_, random_shape_, 7.f);
+    const float beta_local = idsp::clamp(kaiser_beta_ + shape_jit, 0.f, 14.f);
+    select_kaiser_luts(beta_local, g.win_lut_a, g.win_lut_b, g.win_blend);
+
+    // Per-grain level and pan jitter. Both are additive offsets to the
+    // voice's base_level_ / base_pan_, applied per-grain inside process()
+    // and then clamped into [0, 1]. Spray range = 1.0 so at depth=1 the
+    // jitter can swing the full slider range.
+    g.level_jit = per_grain_jitter(grain_rng_, random_level_, 1.f);
+    g.pan_jit   = per_grain_jitter(grain_rng_, random_pan_,   1.f);
+}
+
+size_t Voice::find_grain_slot()
+{
+    // Prefer any inactive slot.
+    for (size_t i = 0; i < grains_.size(); ++i)
+    {
+        if (!grains_[i].active) return i;
+    }
+    // Otherwise steal the slot with highest phase (oldest grain — closest to dying).
+    size_t oldest = 0;
+    float max_phase = grains_[0].phase;
+    for (size_t i = 1; i < grains_.size(); ++i)
+    {
+        if (grains_[i].phase > max_phase) { max_phase = grains_[i].phase; oldest = i; }
+    }
+    return oldest;
+}
+
+float Voice::wrap_position(float pos, float start_f, float end_f) const
+{
+    const float duration_f = end_f - start_f;
+    if (duration_f <= 0.f) return pos;
+    if (sample_loops_)
+    {
+        while (pos >= end_f)  pos -= duration_f;
+        while (pos < start_f) pos += duration_f;
+    }
+    return pos;
 }
 
 void Voice::wrap_grain_read(Grain& g, float start_f, float end_f) const
@@ -213,23 +470,18 @@ void Voice::prepare_for_trigger(const VoiceLiveParams& p, size_t buffer_size, fl
     this->set_live_params(p, buffer_size, sample_rate);
     this->retrigger_position();
 
-    // Initialise the grain cluster: kill any leftover state and spawn slot 0.
-    // For width=1 it stays Body forever (until the loop-boundary crossfade
-    // promotes it to FadeOut). For width>=2 it spawns the chain by hitting
-    // phase=1/width and waking slot 1, which wakes slot 2, etc.
+    // Reset the grain cluster and seed the synth-side spawning state.
     this->reset_grains();
-    const int width = std::max(1, std::min(8, static_cast<int>(std::lround(width_))));
-    last_width_ = width;
-    const float window_samples = std::max(1.f, window_size_ * sample_rate_);
-    if (width == 1)
+    synth_hop_counter_         = 0.f;          // spawn immediately on first sample
+    last_loop_crossfade_mode_  = loop_crossfade_mode_;
+
+    if (loop_crossfade_mode_)
     {
         // Body grain: phase doesn't advance; amp stays at 1 until crossfade.
-        this->spawn_grain(0, Grain::Role::Body, position_, 0.f);
+        this->spawn_grain_loop_xfade(0, Grain::Role::Body, position_, 0.f);
     }
-    else
-    {
-        this->spawn_grain(0, Grain::Role::Body, position_, 1.f / window_samples);
-    }
+    // C-OLA mode: the first process() sample will fire a spawn via the
+    // hop counter at zero, so nothing to do here.
 
     active_     = (length_ > 0);
     launch_seq_ = seq;
@@ -237,6 +489,11 @@ void Voice::prepare_for_trigger(const VoiceLiveParams& p, size_t buffer_size, fl
 
 void Voice::trigger_plain(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
 {
+    sample_loops_ = true;   // play voices always loop
+    // Non-MIDI launch: clear any inherited MIDI offsets so a recycled slot
+    // doesn't carry pitch / velocity scaling from a previous note.
+    midi_octave_offset_   = 0.f;
+    midi_velocity_factor_ = 1.f;
     this->prepare_for_trigger(p, buffer_size, sample_rate, seq);
     envelope_mode_ = EnvelopeMode::None;
     envelope_.reset();
@@ -244,6 +501,9 @@ void Voice::trigger_plain(const VoiceLiveParams& p, size_t buffer_size, float sa
 
 void Voice::trigger_ar(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
 {
+    sample_loops_ = false;  // envelope_trigger AR voices are one-shot
+    midi_octave_offset_   = 0.f;
+    midi_velocity_factor_ = 1.f;
     this->prepare_for_trigger(p, buffer_size, sample_rate, seq);
     envelope_mode_ = EnvelopeMode::AR;
     envelope_.trigger_ar(env_attack_, env_release_);
@@ -251,9 +511,20 @@ void Voice::trigger_ar(const VoiceLiveParams& p, size_t buffer_size, float sampl
 
 void Voice::trigger_adsr_gated(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
 {
+    sample_loops_ = true;   // MIDI voices loop while gated
+    // Reset to identity first; Instrument calls set_midi_offsets right after
+    // to install the real per-note values.
+    midi_octave_offset_   = 0.f;
+    midi_velocity_factor_ = 1.f;
     this->prepare_for_trigger(p, buffer_size, sample_rate, seq);
     envelope_mode_ = EnvelopeMode::ADSR;
     envelope_.trigger_adsr(env_attack_, env_decay_, env_sustain_level_, env_release_);
+}
+
+void Voice::set_midi_offsets(float octave_offset, float velocity_factor)
+{
+    midi_octave_offset_   = octave_offset;
+    midi_velocity_factor_ = velocity_factor;
 }
 
 void Voice::kill()
@@ -305,24 +576,6 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
 {
     if (!active_) return {0.f, 0.f};
 
-    // --- Auto-release predictor (ADSR + !loop): start the release ramp
-    // `release_len_` samples before we'd hit the end, so it completes in time.
-    if (envelope_mode_ == EnvelopeMode::ADSR && !sample_loops_ && envelope_.is_active())
-    {
-        const float speed_mag = (base_speed_ >= 0.f) ? base_speed_ : -base_speed_;
-        if (speed_mag > 0.f)
-        {
-            const float samples_left = forward_
-                ? (static_cast<float>(end_pos_) - position_)
-                : (position_ - static_cast<float>(start_pos_));
-            const float time_left_samples = samples_left / speed_mag;
-            if (time_left_samples <= static_cast<float>(env_release_))
-            {
-                envelope_.release();
-            }
-        }
-    }
-
     // --- Envelope step (None voices keep envelope idle → e stays 0).
     const bool was_active = envelope_.is_active();
     const float e = (envelope_mode_ == EnvelopeMode::None)
@@ -355,11 +608,12 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
         ? static_cast<float>(end_pos_) + length_mod * static_cast<float>(length_)
         : static_cast<float>(end_pos_);
 
-    // --- Level (multiplicative VCA; envelope and phase mods multiply) ---
-    // depth_level_ acts as wet/dry between "ignore envelope" (d=0 → factor=1)
-    // and "envelope is the VCA" (d=±1 → factor=e or 1-e). For None-mode
-    // voices we skip envelope_level entirely, since e is pinned to 0 and a
-    // non-zero depth would silence the voice.
+    // --- Level / Pan modulation factors (uniform across grains) ---
+    // The env/phase mod chain is uniform across all grains active this
+    // sample; the grain-specific level/pan jitter is added inside the grain
+    // loop. depth_level_ acts as wet/dry between "ignore envelope" (d=0 →
+    // factor=1) and "envelope is the VCA" (d=±1 → factor=e or 1-e). For
+    // None-mode voices we skip envelope_level entirely.
     float env_level_mod;
     if (depth_level_ >= 0.f) env_level_mod = (1.f - depth_level_) + depth_level_ * e;
     else                     env_level_mod = 1.f + depth_level_ * (1.f - e);
@@ -368,56 +622,44 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
     if (depth_phase_level_ >= 0.f) phase_level_mod = (1.f - depth_phase_level_) + depth_phase_level_ * ph;
     else                           phase_level_mod = 1.f + depth_phase_level_ * (1.f - ph);
 
-    const float voice_level = (envelope_mode_ == EnvelopeMode::None)
-        ? base_level_ * phase_level_mod
-        : base_level_ * env_level_mod * phase_level_mod;
+    const float env_phase_level_scale = (envelope_mode_ == EnvelopeMode::None)
+        ? phase_level_mod
+        : env_level_mod * phase_level_mod;
 
-    // --- Pan (LUT, skipped when unmodulated) ---
-    float pan_l, pan_r;
-    if (depth_pan_ == 0.f && depth_phase_pan_ == 0.f)
-    {
-        pan_l = base_pan_l_;
-        pan_r = base_pan_r_;
-    }
-    else
-    {
-        const float pan = idsp::clamp(base_pan_ + depth_pan_ * e + depth_phase_pan_ * ph, 0.f, 1.f);
-        compute_pan_gains_lut(pan, pan_l, pan_r);
-    }
+    // Additive pan offset from envelope + phase modulation; per-grain jitter
+    // is added on top of this inside the grain loop.
+    const float pan_env_phase_mod = depth_pan_ * e + depth_phase_pan_ * ph;
 
     // --- Granular cluster read & advance ---
     const float start_f = static_cast<float>(start_pos_);
     const float end_f   = effective_end;
 
-    // Pitch sign locked at trigger (matches `forward_`). Magnitude editable.
-    // base_pitch_ already carries the right sign because set_live_params()
-    // applies `forward_ ? +mag : -mag`.
-    const float pitch_eff = base_pitch_;
-
-    const int width = std::max(1, std::min(8, static_cast<int>(std::lround(width_))));
-    if (width != last_width_)
+    // Detect a flip between loop-crossfade and C-OLA modes — reset cluster.
+    if (loop_crossfade_mode_ != last_loop_crossfade_mode_)
     {
-        // Mode flip (1↔N or N→M). Reset the cluster and respawn slot 0 so
-        // the new topology starts cleanly. Brief glitch acceptable.
         this->reset_grains();
-        const float ws = std::max(1.f, window_size_ * sample_rate_);
-        const float phase_inc0 = (width == 1) ? 0.f : (1.f / ws);
-        this->spawn_grain(0, Grain::Role::Body, position_, phase_inc0);
-        last_width_ = width;
+        if (loop_crossfade_mode_)
+        {
+            this->spawn_grain_loop_xfade(0, Grain::Role::Body, position_, 0.f);
+        }
+        else
+        {
+            synth_hop_counter_ = 0.f;       // spawn immediately
+        }
+        last_loop_crossfade_mode_ = loop_crossfade_mode_;
     }
 
     float acc_l = 0.f, acc_r = 0.f;
-    const float window_samples      = std::max(1.f, window_size_ * sample_rate_);
-    const float half_window_samples = 0.5f * window_samples;
 
-    if (width == 1)
+    if (loop_crossfade_mode_)
     {
-        // --- width=1: continuous playhead with loop-boundary crossfade ---
-        // Trigger crossfade if loop is on, Body exists, and the master clock
-        // is within half_window of the boundary. Skip the crossfade entirely
-        // when window_shape is at the rectangle end (hard-cut behaviour).
+        // --- Single-playhead mode with loop-boundary crossfade. ---
+        // Crossfade duration = half the effective window length (in seconds:
+        // half of n_eff_samples_).
+        const float half_window_samples = 0.5f * n_eff_samples_;
+
         if (sample_loops_ && grains_[0].active && grains_[0].role == Grain::Role::Body
-            && !grains_[1].active && window_shape_ > 0.001f)
+            && !grains_[1].active && shape_deviation_ > -0.99f)
         {
             const float dist = forward_ ? (end_f - position_) : (position_ - start_f);
             if (dist > 0.f && dist <= half_window_samples)
@@ -425,11 +667,23 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
                 grains_[0].role      = Grain::Role::FadeOut;
                 grains_[0].phase     = 0.f;
                 grains_[0].phase_inc = 1.f / half_window_samples;
-                this->spawn_grain(1, Grain::Role::FadeIn,
-                                  forward_ ? start_f : (end_f - 1.f),
-                                  1.f / half_window_samples);
+                this->spawn_grain_loop_xfade(
+                    1, Grain::Role::FadeIn,
+                    forward_ ? start_f : (end_f - 1.f),
+                    1.f / half_window_samples);
             }
         }
+
+        // Crossfade ramp curve at shape=-1 → hard step; otherwise linear.
+        auto ramp = [](float shape_dev, float t) -> float
+        {
+            if (shape_dev <= -0.99f) return (t >= 0.5f) ? 1.f : 0.f;
+            // shape_dev ∈ (-0.99, 1] → blend linear → raised cosine
+            const float blend  = idsp::clamp((shape_dev + 1.f) * 0.5f, 0.f, 1.f);
+            const float linear = t;
+            const float cosw   = 0.5f - 0.5f * std::cos(kPi * t);
+            return (1.f - blend) * linear + blend * cosw;
+        };
 
         for (size_t gi = 0; gi < 2; ++gi)
         {
@@ -437,15 +691,28 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
             if (!g.active) continue;
 
             float amp;
-            if      (g.role == Grain::Role::FadeOut) amp = ramp_curve(window_shape_, 1.f - g.phase);
-            else if (g.role == Grain::Role::FadeIn)  amp = ramp_curve(window_shape_, g.phase);
+            if      (g.role == Grain::Role::FadeOut) amp = ramp(shape_deviation_, 1.f - g.phase);
+            else if (g.role == Grain::Role::FadeIn)  amp = ramp(shape_deviation_, g.phase);
             else                                     amp = 1.f;
 
-            const float rp = g.read_pos + read_offset;
-            acc_l += amp * left.read_at(rp);
-            acc_r += amp * right.read_at(rp);
+            // Per-grain level + pan. In loop-crossfade mode level_jit/pan_jit
+            // are 0 (spawn_grain_loop_xfade doesn't apply random), so this is
+            // equivalent to a uniform base_level/base_pan with env/phase mods.
+            const float g_level = idsp::clamp(base_level_ + g.level_jit, 0.f, 1.f)
+                                * env_phase_level_scale * midi_velocity_factor_;
+            const float g_pan   = idsp::clamp(base_pan_ + pan_env_phase_mod + g.pan_jit, 0.f, 1.f);
+            float g_pan_l, g_pan_r;
+            compute_pan_gains_lut(g_pan, g_pan_l, g_pan_r);
 
-            g.read_pos += pitch_eff;
+            const float rp = g.read_pos + read_offset;
+            acc_l += amp * g_level * g_pan_l * left.read_at(rp);
+            acc_r += amp * g_level * g_pan_r * right.read_at(rp);
+
+            // Loop-crossfade mode is the "single playhead" case — read rate
+            // follows live `speed`, not a snapshot taken at spawn time. This
+            // makes speed-slider edits take effect immediately rather than at
+            // the next loop seam.
+            g.read_pos += speed;
             wrap_grain_read(g, start_f, end_f);
 
             if (g.role != Grain::Role::Body)
@@ -456,60 +723,59 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
                     g.active = false;
                     if (grains_[1].active)
                     {
-                        grains_[0]            = grains_[1];
-                        grains_[0].role       = Grain::Role::Body;
-                        grains_[0].phase      = 0.f;
-                        grains_[0].phase_inc  = 0.f;
-                        grains_[0].spawned_next = false;
-                        grains_[1].active = false;
+                        grains_[0]           = grains_[1];
+                        grains_[0].role      = Grain::Role::Body;
+                        grains_[0].phase     = 0.f;
+                        grains_[0].phase_inc = 0.f;
+                        grains_[1].active    = false;
                     }
                 }
             }
         }
-
-        // Body died (e.g. wrapped out of a non-looping voice). The voice's
-        // own check_bounds below will kill it.
     }
     else
     {
-        // --- width >= 2: continuous granular cluster ---
-        const float trigger_phase = 1.f / static_cast<float>(width);
-        for (size_t gi = 0; gi < grains_.size(); ++gi)
+        // --- C-OLA grain cluster ---
+        // Spawn a new grain every `hop` OUTPUT samples (NOT scaled by speed),
+        // so the cluster geometry stays constant on the output side. Each
+        // grain spawns at `voice.position_` — which already advances at
+        // `speed` per output sample — so the source traversal rate (= loop
+        // duration) tracks `speed` alone, while per-grain pitch_ratio shifts
+        // pitch without affecting how fast the loop plays.
+        const float base_hop = n_eff_samples_ / static_cast<float>(std::max(1, overlap_eff_));
+
+        synth_hop_counter_ -= 1.f;
+        while (synth_hop_counter_ <= 0.f)
         {
-            auto& g = grains_[gi];
+            const size_t slot = this->find_grain_slot();
+            this->spawn_cola_grain(slot, position_);
+            // Per-grain hop-time jitter for random_width (±50 % of hop at depth=1).
+            const float hop_jit = per_grain_jitter(grain_rng_, random_grains_, base_hop * 0.5f);
+            synth_hop_counter_ += std::max(1.f, base_hop + hop_jit);
+        }
+
+        for (auto& g : grains_)
+        {
             if (!g.active) continue;
 
-            const float amp = window_value(window_shape_, g.phase);
-            const float rp  = g.read_pos + read_offset;
-            acc_l += amp * left.read_at(rp);
-            acc_r += amp * right.read_at(rp);
+            const float amp = read_kaiser_window(g.win_lut_a, g.win_lut_b, g.win_blend, g.phase);
 
-            g.read_pos += pitch_eff;
+            // Per-grain level + pan with random jitter baked in.
+            const float g_level = idsp::clamp(base_level_ + g.level_jit, 0.f, 1.f)
+                                * env_phase_level_scale * midi_velocity_factor_;
+            const float g_pan   = idsp::clamp(base_pan_ + pan_env_phase_mod + g.pan_jit, 0.f, 1.f);
+            float g_pan_l, g_pan_r;
+            compute_pan_gains_lut(g_pan, g_pan_l, g_pan_r);
+
+            const float rp  = g.read_pos + read_offset;
+            acc_l += amp * g_level * g_pan_l * left.read_at(rp);
+            acc_r += amp * g_level * g_pan_r * right.read_at(rp);
+
+            g.read_pos += g.pitch_ratio;
             wrap_grain_read(g, start_f, end_f);
 
             g.phase += g.phase_inc;
-
-            if (!g.spawned_next && g.phase >= trigger_phase)
-            {
-                const size_t next = (gi + 1) % static_cast<size_t>(width);
-                if (!grains_[next].active)
-                {
-                    this->spawn_grain(next, Grain::Role::Body, position_, 1.f / window_samples);
-                }
-                g.spawned_next = true;
-            }
-
             if (g.phase >= 1.f) g.active = false;
-        }
-
-        // Safety net: if the whole cluster died (e.g. width was just raised
-        // or sample_rate/window changed), respawn slot 0 so the voice keeps
-        // making sound until check_bounds kills it.
-        bool any_alive = false;
-        for (int i = 0; i < width; ++i) { if (grains_[i].active) { any_alive = true; break; } }
-        if (!any_alive)
-        {
-            this->spawn_grain(0, Grain::Role::Body, position_, 1.f / window_samples);
         }
     }
 
@@ -526,5 +792,5 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
         return {0.f, 0.f};
     }
 
-    return { voice_level * pan_l * acc_l, voice_level * pan_r * acc_r };
+    return { acc_l, acc_r };
 }

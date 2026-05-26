@@ -67,9 +67,8 @@ MainComponent::MainComponent(EngineAudioProcessor& processor_, EngineAudioProces
     // Start timer to check for file chooser requests (check every 100ms)
     this->startTimer(100);
 
-    // Initial mode is Auto: light up the Auto button, leave Global off.
-    this->set_bool_juce("auto",   true);
-    this->set_bool_juce("global", false);
+    // Default mode is Global (no Auto state any more) — light the Global LED.
+    this->set_bool_juce("global", true);
 
     // Initial panel selection.
     this->set_active_panel("main");
@@ -147,12 +146,25 @@ void MainComponent::timerCallback()
         this->main_panel.set_voice_brightness(i, gui_output.voice_volume[slot].load());
     }
 
+    // Bidirectional position slider — write the audio-published playback
+    // position into the JUCE `position` parameter only when the user isn't
+    // dragging. We also publish the gesture state to gui_input so the audio
+    // thread knows whether to treat the slider as a scrub command.
+    const bool position_dragged = this->main_panel.is_slider_being_gestured("position");
+    this->processor.get_gui_input_data().position_scrubbing.store(position_dragged);
+    if (!position_dragged)
+    {
+        this->set_float_juce("position", gui_output.playback_position_normalized.load());
+    }
+
+    // Grey out the pitch slider when timestretch is OFF — its value is
+    // forced to 0 inside Voice, so visually communicating "ignored" helps.
+    const bool ts_on = this->read_juce_bool("timestretch");
+    this->main_panel.set_slider_alpha("pitch", ts_on ? 1.f : 0.4f);
+
     // Pump the mode controller. It decides transitions; we just wire the
     // JUCE button reads/writes and refresh voice-button selection visuals.
-    const auto desired = this->mode_controller_.tick(
-        this->read_juce_bool("auto"),
-        this->read_juce_bool("global"));
-    this->set_bool_juce("auto",   desired.auto_on);
+    const auto desired = this->mode_controller_.tick(this->read_juce_bool("global"));
     this->set_bool_juce("global", desired.global_on);
     this->refresh_voice_button_visuals();
 }
@@ -160,11 +172,8 @@ void MainComponent::timerCallback()
 void MainComponent::on_voice_button_clicked(size_t voice_index)
 {
     this->mode_controller_.on_voice_button_clicked(voice_index);
-    // Sync the auto/global JUCE params to the new mode IMMEDIATELY so the
-    // next timer tick doesn't see stale state (e.g. auto still true while we
-    // just entered Voice mode) and misinterpret it as a user click on Auto.
-    const bool in_auto = (this->mode_controller_.mode() == ModeController::Mode::Auto);
-    this->set_bool_juce("auto",   in_auto);
+    // Sync the global JUCE param to the new mode IMMEDIATELY so the next
+    // timer tick doesn't see stale state.
     this->set_bool_juce("global", this->mode_controller_.global_on());
     this->refresh_voice_button_visuals();
 }

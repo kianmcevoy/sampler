@@ -56,14 +56,14 @@ inline constexpr std::array<VoiceParamFloatEntry, 23> voice_param_floats = {{
     {"phase_length",     &VoiceLiveParams::phase_length},
     {"phase_level",      &VoiceLiveParams::phase_level},
     {"phase_pan",        &VoiceLiveParams::phase_pan},
-    {"pitch",            &VoiceLiveParams::pitch},
-    {"window_size",      &VoiceLiveParams::window_size},
-    {"window_shape",     &VoiceLiveParams::window_shape},
-    {"width",            &VoiceLiveParams::width},
+    {"pitch",            &VoiceLiveParams::pitch_deviation},
+    {"size",             &VoiceLiveParams::size_deviation},
+    {"shape",            &VoiceLiveParams::shape_deviation},
+    {"grains",           &VoiceLiveParams::grains_deviation},
 }};
 
 inline constexpr std::array<VoiceParamBoolEntry, 1> voice_param_bools = {{
-    {"loop",             &VoiceLiveParams::loop},
+    {"timestretch",      &VoiceLiveParams::timestretch},
 }};
 
 #endif

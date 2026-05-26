@@ -34,7 +34,6 @@ struct VoiceLiveParams
 	float speed         { 1.f };
 	float level         { 1.f };
 	float pan           { 0.5f };
-	bool  loop          { false };
 
 	// ADSR envelope: attack/decay/release are durations (scaled against
 	// loop length or 0..5 s by Voice::set_live_params); sustain is a level.
@@ -55,15 +54,35 @@ struct VoiceLiveParams
 	float phase_level     { 0.f };
 	float phase_pan       { 0.f };
 
-	// Granular per-voice params.
-	// pitch: per-sample read rate inside grains (independent of `speed`).
-	// window_size: grain length in seconds (also crossfade length when width=1).
-	// window_shape: 0=rect, 0.33=down-ramp, 0.66=cosine, 1=up-ramp (4-way morph).
-	// width: 1..8, number of grains in the cluster. Stored as float, snapped at use.
-	float pitch         { 1.f };
-	float window_size   { 0.5f };
-	float window_shape  { 0.f };
-	float width         { 1.f };
+	// Granular per-voice params — bipolar deviations from an auto-computed
+	// C-OLA optimum (recomputed each block from speed + pitch).
+	// pitch_deviation : pitch shift in octaves. 0 = no shift (pitch tracks
+	//                   speed); ±2 = ±2 octaves.
+	// size_deviation  : log-2 deviation from N_auto. ±1 = ×0.25..×4.
+	// shape_deviation : window selection. -1 = rect (Kaiser β=0), 0 = Hann-
+	//                   like (β=6), +1 = Kaiser β=14.
+	// width_deviation : log-2 deviation from auto overlap count, clamped to
+	//                   [2, 8] grains. Sentinel: ≤ -0.95 selects the special
+	//                   loop-boundary crossfade mode (2 unwindowed playheads).
+	float pitch_deviation  { 0.f };
+	float size_deviation   { 0.f };
+	float shape_deviation  { 0.f };
+	float grains_deviation { 0.f };
+
+	// Independent-pitch toggle. ON ⇒ C-OLA cluster honors pitch_deviation;
+	// OFF ⇒ pitch_deviation is forced to 0 and the voice uses the single-
+	// playhead loop-boundary crossfade path.
+	bool  timestretch      { false };
+
+	// Per-grain random depth (0 = identical grains, 0.5 = decorrelating,
+	// 1 = spray). Applied inside Voice at each grain spawn.
+	float random_pitch    { 0.f };
+	float random_size     { 0.f };
+	float random_shape    { 0.f };
+	float random_grains   { 0.f };
+	float random_position { 0.f };  // jitters per-grain starting read position
+	float random_level    { 0.f };  // jitters per-grain amplitude
+	float random_pan      { 0.f };  // jitters per-grain stereo position
 };
 
 /** Per-block MIDI note event published by ParameterInterface to Instrument.
@@ -77,9 +96,12 @@ struct MidiNoteEvent
 {
 	bool     note_on;     // true = note-on (trigger), false = note-off (release)
 	uint64_t midi_seq;    // unique per note-on; note-off references the same seq
-	float    velocity;    // level (slider_level * (vel/127)^2) — note-on only
-	float    note_ratio;  // pure 2^((note-60)/12) pitch ratio — Instrument decides
-	                      // whether to apply it to speed or pitch based on timestretch.
+	float    velocity;    // (vel/127)^2 factor in [0, 1] — Voice multiplies
+	                      // its per-grain level by this internally (kept out
+	                      // of VoiceLiveParams so the slider snapshot can't
+	                      // compound it).
+	float    note_ratio;  // pure 2^((note-60)/12) pitch ratio — Voice combines
+	                      // it with the slider pitch/speed via set_midi_offsets.
 };
 
 struct ParameterData
@@ -94,8 +116,10 @@ struct ParameterData
 	float pan;
 	bool play;
 	bool stop;
-	bool loop;
+	bool latch;
 	bool timestretch;
+	float position;          // [0, 1] — bidirectional pos-knob (scrub + display)
+	bool position_scrubbing; // true while the user is dragging the position pot
 
 	//envelope controls (ADSR)
 	float attack;
@@ -126,17 +150,19 @@ struct ParameterData
 	float phase_level;
 	float phase_pan;
 
-	//granular per-voice (mirrors VoiceLiveParams' granular section)
-	float pitch;
-	float window_size;
-	float window_shape;
-	float width;
+	//granular per-voice (mirrors VoiceLiveParams' granular section — all
+	//bipolar deviations centered on 0 = auto)
+	float pitch_deviation;
+	float size_deviation;
+	float shape_deviation;
+	float grains_deviation;
 
-	//granular random modulation (per-launch jitter)
+	//granular per-grain random depth (0 = none, 0.5 = decorrelate, 1 = spray)
 	float random_pitch;
-	float random_window_size;
-	float random_window_shape;
-	float random_width;
+	float random_size;
+	float random_shape;
+	float random_grains;
+	float random_position;
 
 	// Per-voice live params. When `selected_voice` is in [0, max_voices) the
 	// matching slot is the live-edit target — its values are kept current

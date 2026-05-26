@@ -118,6 +118,12 @@ class MainPanel final:
         /// @brief Toggle the "selected" visual cue on voice button
         /// `button_idx`. Independent of activity state.
         void set_voice_selected(size_t button_idx, bool selected);
+        /// @brief Set the JUCE alpha on the slider whose param id matches
+        /// `id` (1.0 = normal, 0.4 = greyed). No-op if not found.
+        void set_slider_alpha(const juce::String& id, float alpha);
+        /// @brief True if the user is currently dragging the slider whose
+        /// param id matches `id`. Returns false if not found.
+        bool is_slider_being_gestured(const juce::String& id) const;
 
         igui::LedButton settings_menu_button;
 

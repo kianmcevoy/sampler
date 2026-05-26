@@ -11,7 +11,7 @@ ParameterInterface::ParameterInterface(ParameterInterfaceOutputData& output)
 	// Pre-load the bundled default sample so the sampler is usable without
 	// going through the file chooser first. Start / length default to the
 	// full file.
-	const auto default_sample = AssetManager::get_resource_file("gui/assets/sample.wav");
+	const auto default_sample = AssetManager::get_resource_file("gui/assets/voice.wav");
 	if (load_sample_into_buffer(default_sample, output, 0.0f, 1.0f))
 	{
 		// Trigger a GUI repaint of the waveform once the panels come up.
@@ -34,8 +34,9 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 	// gui/src/controls.cpp), so no rescaling is needed here.
 	output.parameter.play        = input.controls.triggers.at("play");
 	output.parameter.stop        = input.controls.triggers.at("stop");
-	output.parameter.loop        = input.controls.buttons.at("loop");
+	output.parameter.latch       = input.controls.triggers.at("latch");
 	output.parameter.timestretch = input.controls.buttons.at("timestretch");
+	output.parameter.position    = input.controls.sliders.at("position");
 	// Modwheel sums with the start slider, clamped to [0, 1].
 	output.parameter.start  = idsp::clamp(input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
 	output.parameter.length = input.controls.sliders.at("length");
@@ -69,21 +70,23 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
     output.parameter.phase_level  = input.controls.sliders.at("phase_level");
     output.parameter.phase_pan    = input.controls.sliders.at("phase_pan");
 
-    output.parameter.pitch        = input.controls.sliders.at("pitch");
-    output.parameter.window_size  = input.controls.sliders.at("window_size");
-    output.parameter.window_shape = input.controls.sliders.at("window_shape");
-    output.parameter.width        = input.controls.sliders.at("width");
+    output.parameter.pitch_deviation  = input.controls.sliders.at("pitch");
+    output.parameter.size_deviation   = input.controls.sliders.at("size");
+    output.parameter.shape_deviation  = input.controls.sliders.at("shape");
+    output.parameter.grains_deviation = input.controls.sliders.at("grains");
 
-    output.parameter.random_pitch        = input.controls.sliders.at("random_pitch");
-    output.parameter.random_window_size  = input.controls.sliders.at("random_window_size");
-    output.parameter.random_window_shape = input.controls.sliders.at("random_window_shape");
-    output.parameter.random_width        = input.controls.sliders.at("random_width");
+    output.parameter.random_pitch    = input.controls.sliders.at("random_pitch");
+    output.parameter.random_size     = input.controls.sliders.at("random_size");
+    output.parameter.random_shape    = input.controls.sliders.at("random_shape");
+    output.parameter.random_grains   = input.controls.sliders.at("random_grains");
+    output.parameter.random_position = input.controls.sliders.at("random_position");
 
     // Selected voice (GUI-thread state). The Instrument uses this both to
     // route live edits onto a specific voice and to force a `play` into that
     // slot. -1 means "no selection" — fall back to the normal allocator.
-    output.parameter.selected_voice = input.gui.selected_voice.load();
-    output.parameter.global_mode    = input.gui.global_mode.load();
+    output.parameter.selected_voice     = input.gui.selected_voice.load();
+    output.parameter.global_mode        = input.gui.global_mode.load();
+    output.parameter.position_scrubbing = input.gui.position_scrubbing.load();
 
 	if (output.gui.waveform_ready.load() && !output.gui.waveform_left.empty())
 	{
@@ -201,8 +204,7 @@ void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
 {
     out.midi_event_count = 0;
 
-    const float slider_level   = controls.sliders.at("level");
-    const bool  voice_stealing = controls.buttons.at("voice_stealing");
+    const bool voice_stealing = controls.buttons.at("voice_stealing");
 
     // Push raw MIDI bytes through the parser. JUCE delivers each message as
     // a contiguous block already framed by status byte; the imidi queue
@@ -235,15 +237,18 @@ void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
             this->active_notes_[slot] = ActiveNote { /*active=*/true, /*note=*/d.note, /*midi_seq=*/seq };
 
             const float v01 = static_cast<float>(d.velocity) / 127.f;
-            const float level_scaled = slider_level * v01 * v01;
-            // Pure pitch ratio (no slider speed baked in) — the Instrument
-            // applies it to either pitch or speed depending on timestretch.
+            // Perceptual-quadratic velocity factor; the Voice multiplies its
+            // per-grain level by this internally (it never appears in any
+            // VoiceLiveParams snapshot, so the slider can't compound it).
+            const float velocity_factor = v01 * v01;
+            // Pure pitch ratio (no slider speed baked in) — the Voice combines
+            // it with the live slider values during set_live_params.
             const float ratio = std::pow(2.f, (static_cast<float>(d.note) - 60.f) / 12.f);
 
             out.midi_events[out.midi_event_count++] = MidiNoteEvent {
                 /*note_on=*/true,
                 /*midi_seq=*/seq,
-                /*velocity=*/level_scaled,
+                /*velocity=*/velocity_factor,
                 /*note_ratio=*/ratio,
             };
         }

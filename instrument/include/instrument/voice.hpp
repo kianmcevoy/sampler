@@ -51,6 +51,13 @@ public:
     /** Apply a fresh live-param snapshot without retriggering. */
     void set_live_params(const VoiceLiveParams& p, size_t buffer_size, float sample_rate);
 
+    /** Set the MIDI per-note offsets (pitch in octaves, velocity factor).
+     *  Called by Instrument right after a MIDI-triggered ADSR voice spawns.
+     *  These offsets live entirely inside Voice — they don't appear in
+     *  VoiceLiveParams and are combined with the slider values during
+     *  set_live_params (pitch / speed) and per-grain (level). */
+    void set_midi_offsets(float octave_offset, float velocity_factor);
+
     void kill();
 
     /** Begin release. Only meaningful in ADSR mode; no-op otherwise so a
@@ -60,6 +67,12 @@ public:
     bool         is_active()     const { return active_; }
     uint64_t     launch_seq()    const { return launch_seq_; }
     float        position()      const { return position_; }
+
+    /** Teleport the master playhead to `frac` ([0, 1]) of the active loop
+     *  region and reset the grain cluster so the jump is immediate. */
+    void  set_loop_position_fraction(float frac);
+    /** Current master playhead position as a fraction of the loop region. */
+    float loop_position_fraction() const;
     EnvelopeMode envelope_mode() const { return envelope_mode_; }
     float        env_value()     const { return envelope_.current_value(); }
     float        env_phase()     const { return envelope_.get_phase(); }
@@ -71,28 +84,36 @@ public:
                         const idsp::LagrangeDelay<524288>& right);
 
 private:
-    // A single windowed grain inside the voice's grain cluster.
-    // In width=1 mode, slot 0 holds the Body (or FadeOut during a crossfade)
-    // and slot 1 is reserved for a transient FadeIn at the loop boundary.
-    // In width>=2 mode, slots 0..(width-1) form a phase-staggered cluster of
-    // continuously-spawned grains.
+    // A single windowed grain. In loop_crossfade_mode_ (width slider ≤ -0.95)
+    // slot 0 holds the Body and slot 1 is a transient FadeIn at the loop
+    // boundary. Otherwise the C-OLA cluster fills slots 0..(overlap-1) with
+    // continuously spawned grains, each carrying its own per-grain pitch and
+    // window selection (random-jittered at spawn time).
     struct Grain
     {
         enum class Role { Body, FadeIn, FadeOut };
         bool   active        { false };
         Role   role          { Role::Body };
         float  read_pos      { 0.f };
+        float  pitch_ratio   { 1.f };  // per-sample read advance (per-grain jitter applied)
         float  phase         { 0.f };  // [0, 1) progress through window
-        float  phase_inc     { 0.f };  // per-sample phase increment
-        bool   spawned_next  { false };
+        float  phase_inc     { 0.f };  // per-sample window advance
+        int    win_lut_a     { 0 };    // window-LUT pair + blend for Kaiser β selection
+        int    win_lut_b     { 0 };
+        float  win_blend     { 0.f };
+        float  level_jit     { 0.f };  // additive per-grain level offset (random_level)
+        float  pan_jit       { 0.f };  // additive per-grain pan offset (random_pan)
     };
 
     void prepare_for_trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
     bool check_bounds(float effective_end);
     void retrigger_position();
     void reset_grains();
-    void spawn_grain(size_t slot, Grain::Role role, float read_pos, float phase_inc);
+    void spawn_grain_loop_xfade(size_t slot, Grain::Role role, float read_pos, float phase_inc);
+    void spawn_cola_grain(size_t slot, float base_read_pos);
+    size_t find_grain_slot();
     void wrap_grain_read(Grain& g, float start_f, float end_f) const;
+    float wrap_position(float pos, float start_f, float end_f) const;
 
     // Live-editable base params (re-derived from VoiceLiveParams each block)
     size_t start_pos_{0};
@@ -124,16 +145,39 @@ private:
     float depth_phase_level_{0.f};
     float depth_phase_pan_{0.f};
 
-    // Granular per-voice params. `base_pitch_` magnitude is editable, sign
-    // locked to `forward_` at trigger (like `base_speed_`). window_size_ is
-    // in seconds; window_shape_ is the 4-way morph [0,1]; width_ is the
-    // grain-cluster size 1..8 (stored as float, snapped at use).
-    float  base_pitch_   { 1.f };
-    float  window_size_  { 0.5f };
-    float  window_shape_ { 0.f };
-    float  width_        { 1.f };
-    float  sample_rate_  { 48000.f };
-    int    last_width_   { 0 };       // detects 1↔N mode flips, forces grain reset
+    // User-facing granular deviations (copied from VoiceLiveParams each block).
+    float pitch_deviation_   { 0.f };
+    float size_deviation_    { 0.f };
+    float shape_deviation_   { 0.f };
+    float grains_deviation_  { 0.f };
+    bool  timestretch_       { false };
+    float random_pitch_      { 0.f };
+    float random_size_       { 0.f };
+    float random_shape_      { 0.f };
+    float random_grains_     { 0.f };
+    float random_position_   { 0.f };
+    float random_level_      { 0.f };
+    float random_pan_        { 0.f };
+
+    // MIDI per-note offsets, set by `set_midi_offsets`. Non-MIDI voices
+    // (play / envelope_trigger) keep the identity defaults so the same DSP
+    // path works uniformly.
+    float midi_octave_offset_   { 0.f };  // log2(note_ratio)
+    float midi_velocity_factor_ { 1.f };  // (vel/127)^2
+
+    float sample_rate_      { 48000.f };
+
+    // Auto-derived values, recomputed in set_live_params each block.
+    float pitch_ratio_         { 1.f };  // 2^pitch_deviation, signed by forward_
+    float n_eff_samples_       { 1920.f };
+    float kaiser_beta_         { 6.f };  // 0..14
+    int   overlap_eff_         { 2 };    // grain-cluster active count
+    bool  loop_crossfade_mode_ { false };
+    bool  last_loop_crossfade_mode_ { false };  // detects mode flips
+
+    // Synth-side spawning state.
+    float    synth_hop_counter_ { 0.f };
+    uint32_t grain_rng_         { 0x9E3779B9u };
 
     std::array<Grain, 8> grains_{};
 

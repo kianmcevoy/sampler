@@ -55,6 +55,11 @@ class Instrument
         // play, envelope_trigger, or finished MIDI note). Used to route note-off
         // to the correct voice without depending on slot identity.
         std::array<uint64_t, max_voices> voice_midi_seq_{};
+
+        // Per-voice latch flag. Set by the latch trigger; when true, the next
+        // matching note-off is silently swallowed (the voice keeps looping
+        // until stop kills it). Cleared when the voice becomes inactive.
+        std::array<bool, max_voices> voice_latched_{};
 };
 
 #endif

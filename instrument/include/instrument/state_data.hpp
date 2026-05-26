@@ -18,6 +18,12 @@ struct StateData
 {
 	float playback_position { 0.0f }; // Position of the primary (first) active voice, or -1 if none.
 
+	// Normalized loop-position fraction [0, 1] of the routing-target voice
+	// (Voice mode → selected; Global → first active; Auto → newest). Mirrored
+	// by StateInterface into GuiOutputData::playback_position_normalized so
+	// the bidirectional `position` slider can display it.
+	float playback_position_normalized { 0.0f };
+
 	std::array<bool,  max_voices> voice_active   {};
 	std::array<float, max_voices> voice_position {};
 	std::array<float, max_voices> voice_volume   {};

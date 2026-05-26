@@ -32,6 +32,11 @@ struct GuiOutputData
 	std::array<std::atomic<float>, max_voices> voice_position;
 	std::array<std::atomic<float>, max_voices> voice_volume;
 
+	// Current playback position as a fraction [0, 1] of the active loop
+	// region. Drives the bidirectional `position` slider — GUI timer reads
+	// this and writes it back to the JUCE param when the user isn't dragging.
+	std::atomic<float> playback_position_normalized { 0.f };
+
 	// Per-voice effective live param snapshots (audio→GUI). Updated each
 	// block by StateInterface so the GUI can snap sliders on selection.
 	std::array<VoiceParamSnapshot, max_voices> voice_params_snapshot;
@@ -64,6 +69,13 @@ struct GuiInputData
 	// GUI radio invariant. When true: slider edits overlay onto every active
 	// voice each block; `play` retriggers every active voice; `stop` kills all.
 	std::atomic<bool> global_mode { false };
+
+	// True while the user is dragging the `position` slider. Set by the GUI
+	// timer from `igui::UIComponent::parameter_being_gestured()`. The audio
+	// thread reads this to gate the scrub action: only treat the slider value
+	// as a user command while this is true. Avoids the feedback loop where
+	// audio's own echoed-back position would otherwise look like user input.
+	std::atomic<bool> position_scrubbing { false };
 };
 
 #endif

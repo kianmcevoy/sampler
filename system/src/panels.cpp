@@ -871,6 +871,34 @@ void MainPanel::set_voice_selected(size_t button_idx, bool selected)
     this->voice_button_containers[button_idx]->set_selected(selected);
 }
 
+void MainPanel::set_slider_alpha(const juce::String& id, float alpha)
+{
+    for (auto& control : this->controls)
+    {
+        auto* sc = dynamic_cast<SliderContainer*>(control.get());
+        if (sc == nullptr) continue;
+        const auto* param = sc->slider.parameter();
+        if (param != nullptr && param->getParameterID() == id)
+        {
+            sc->setAlpha(alpha);
+            return;
+        }
+    }
+}
+
+bool MainPanel::is_slider_being_gestured(const juce::String& id) const
+{
+    for (const auto& control : this->controls)
+    {
+        const auto* sc = dynamic_cast<const SliderContainer*>(control.get());
+        if (sc == nullptr) continue;
+        const auto* param = sc->slider.parameter();
+        if (param != nullptr && param->getParameterID() == id)
+            return sc->slider.parameter_being_gestured();
+    }
+    return false;
+}
+
 void MainPanel::bounds_changed()
 {
     const auto panel_full_size = this->get_main_component().window_full_size.standard;

@@ -65,15 +65,16 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_trigger("main", "load_sample", "Load Sample", 20.f, 215.f);
 	controls.add_trigger("main", "play",        "Play",        140.f, 215.f);
 	controls.add_trigger("main", "stop",        "Stop",        260.f, 215.f);
-	controls.add_button ("main", "loop",        "Loop",        380.f, 215.f);
-    controls.add_button ("main", "timestretch", "Time Stretch",500.f, 215.f);
+	controls.add_trigger("main", "latch",       "Latch",       380.f, 215.f);
+	controls.add_button ("main", "timestretch", "Time Stretch",500.f, 215.f);
 
 	//playback parameters (start/length fractions of sample; speed bipolar [-4,+4])
-	controls.add_slider("main", "start",  "Start",   0.f,  1.f, 0.f,  20.f, 335.f);
-	controls.add_slider("main", "length", "Length",  0.f,  1.f, 1.f,  140.f, 335.f);
-	controls.add_slider("main", "speed",  "Speed",  -4.f,  4.f, 0.f,  260.f, 335.f);
-	controls.add_slider("main", "level",  "Level",   0.f,  1.f, 1.f,  380.f, 335.f);
-	controls.add_slider("main", "pan",    "Pan",     0.f,  1.f, 0.5f, 500.f, 335.f);
+	controls.add_slider("main", "start",    "Start",    0.f,  1.f, 0.f,   20.f, 455.f);
+	controls.add_slider("main", "length",   "Length",   0.f,  1.f, 1.f,  140.f, 455.f);
+	controls.add_slider("main", "speed",    "Speed",   -4.f,  4.f, 1.f,  260.f, 455.f);
+	controls.add_slider("main", "level",    "Level",    0.f,  1.f, 1.f,  380.f, 455.f);
+	controls.add_slider("main", "pan",      "Pan",      0.f,  1.f, 0.5f, 500.f, 455.f);
+	controls.add_slider("main", "position", "Position", 0.f,  1.f, 0.f,  620.f, 455.f);
 
 	//per-launch random deviation
 	controls.add_slider("modulation", "random_start",  "Random Start",  0.f, 1.f, 0.f,  20.f, 455.f);
@@ -96,20 +97,25 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     controls.add_slider("modulation", "phase_level",  "Phase Level",  -1.f, 1.f, 0.f, 380.f, 695.f);
     controls.add_slider("modulation", "phase_pan",    "Phase Pan",    -1.f, 1.f, 0.f, 500.f, 695.f);
 
-    //granular per-voice (pitch decoupled from speed; window-shape morphs
-    //rect→down-ramp→cos→up-ramp; window_size in seconds; width = number of
-    //grains 1..8). With width=1, window_size doubles as the loop-boundary
-    //crossfade length and window_shape selects the crossfade ramp curve.
-    controls.add_slider("main", "pitch",        "Pitch",        -4.f, 4.f, 1.f,   20.f, 455.f);
-    controls.add_slider("main", "window_size",  "Window Size",   0.1f, 1.f, 0.5f, 140.f, 455.f);
-    controls.add_slider("main", "window_shape", "Window Shape",  0.f,  1.f, 0.f,  260.f, 455.f);
-    controls.add_slider("main", "width",        "Width",         1.f,  8.f, 1.f,  380.f, 455.f);
+    //granular per-voice — all four are bipolar deviations centered on an
+    //auto-computed C-OLA optimum. 0 = use the optimum, ±1 = deviate.
+    //  pitch  : pitch shift in octaves (0 = no shift; up to ±2). Greyed out
+    //           when timestretch is OFF.
+    //  size   : grain length deviation (0 = auto; -1 = quarter; +1 = quadruple)
+    //  shape  : window selection (0 = Hann-like Kaiser β=6; -1 = rect; +1 = Kaiser β=14)
+    //  grains : grain count (-1 → 1 grain; 0 → C-OLA minimum; +1 → 8 grains)
+    controls.add_slider("main", "pitch",  "Pitch",  -2.f, 2.f, 0.f,  20.f, 575.f);
+    controls.add_slider("main", "size",   "Size",   -1.f, 1.f, 0.f, 140.f, 575.f);
+    controls.add_slider("main", "shape",  "Shape",  -1.f, 1.f, 0.f, 260.f, 575.f);
+    controls.add_slider("main", "grains", "Grains", -1.f, 1.f, 0.f, 380.f, 575.f);
 
-    //granular per-launch random (lives alongside the granular controls)
-    controls.add_slider("modulation", "random_pitch",        "Random Pitch",        0.f, 1.f, 0.f, 620.f, 455.f);
-    controls.add_slider("modulation", "random_window_size",  "Random Window Size",  0.f, 1.f, 0.f, 740.f, 455.f);
-    controls.add_slider("modulation", "random_window_shape", "Random Window Shape", 0.f, 1.f, 0.f, 860.f, 455.f);
-    controls.add_slider("modulation", "random_width",        "Random Width",        0.f, 1.f, 0.f, 980.f, 455.f);
+    //granular per-grain random depth — 0 = identical grains, 0.5 = decorrelating
+    //phase jitter (smoother sound), 1 = spray (chaotic). Curve is depth^4 -dominated.
+    controls.add_slider("modulation", "random_pitch",    "Random Pitch",    0.f, 1.f, 0.f,  620.f, 455.f);
+    controls.add_slider("modulation", "random_size",     "Random Size",     0.f, 1.f, 0.f,  740.f, 455.f);
+    controls.add_slider("modulation", "random_shape",    "Random Shape",    0.f, 1.f, 0.f,  860.f, 455.f);
+    controls.add_slider("modulation", "random_grains",   "Random Grains",   0.f, 1.f, 0.f,  980.f, 455.f);
+    controls.add_slider("modulation", "random_position", "Random Position", 0.f, 1.f, 0.f, 1100.f, 455.f);
 
 	//envelope controls (ADSR)
 	controls.add_button ("main", "voice_stealing",    "Voice Stealing",    1220.f,  215.f);
@@ -134,8 +140,8 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
             620.f + 120.f * static_cast<float>(i), 695.f);
     }
 
-    //global button
-    controls.add_button("main", "auto",   "Auto",   1340.f, 215.f);
+    //global button (default state when no voice is selected — also acts as
+    //a "deselect voice / return to Global" button)
     controls.add_button("main", "global", "Global", 1460.f, 215.f);
 
 }

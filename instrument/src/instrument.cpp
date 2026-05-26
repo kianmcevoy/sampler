@@ -2,6 +2,7 @@
 
 #include "idsp/functions.hpp"
 
+#include <cmath>
 #include <cstddef>
 
 namespace
@@ -21,29 +22,18 @@ namespace
         return static_cast<float>(xorshift32(s) >> 8) * (1.f / 8388608.f) - 1.f;
     }
 
-    // When timestretch is off (or width snaps to 1) pitch is forced to track
-    // speed exactly — the granular pitch/window machinery is bypassed and the
-    // voice behaves like a single playhead reading at `speed`. Width=1 always
-    // forces this because there are no overlapping grains to mask a pitch ≠
-    // speed mismatch at the loop seam.
-    inline bool pitch_follows_speed(const ParameterData& p, float width)
-    {
-        const int w = static_cast<int>(width + 0.5f);
-        return !p.timestretch || w <= 1;
-    }
-
     // Apply per-launch random_* jitter to the supplied global params and
     // return the resulting "effective" live params for a new voice.
+    // Granular deviations are passed through unchanged — random for those
+    // is per-grain inside Voice, not per-launch.
     VoiceLiveParams build_effective_live_params(const ParameterData& p, uint32_t& rng_state)
     {
         VoiceLiveParams out;
-        // random_speed is scaled to span the full ±4 speed range.
         out.start  = idsp::clamp(p.start  + bipolar_rand(rng_state) * p.random_start,  0.f, 1.f);
         out.length = idsp::clamp(p.length + bipolar_rand(rng_state) * p.random_length, 0.f, 1.f);
         out.speed  = p.speed + bipolar_rand(rng_state) * p.random_speed * 8.f;
-        out.level  = idsp::clamp(p.level  + bipolar_rand(rng_state) * p.random_level,  0.f, 1.f);
-        out.pan    = idsp::clamp(p.pan    + bipolar_rand(rng_state) * p.random_pan,    0.f, 1.f);
-        out.loop   = p.loop;
+        out.level  = p.level;   // per-grain jitter applied inside Voice
+        out.pan    = p.pan;     // per-grain jitter applied inside Voice
 
         out.attack  = p.attack;
         out.decay   = p.decay;
@@ -62,16 +52,18 @@ namespace
         out.phase_level  = p.phase_level;
         out.phase_pan    = p.phase_pan;
 
-        // Granular: random_pitch is scaled to span ±4 (same magnitude as
-        // random_speed). random_width spans 1..8 (so a value of 1.f produces
-        // full-range jitter). random_window_size is clamped within the
-        // displayed [0.1, 1.0] s range.
-        out.pitch        = p.pitch + bipolar_rand(rng_state) * p.random_pitch * 4.f;
-        out.window_size  = idsp::clamp(p.window_size  + bipolar_rand(rng_state) * p.random_window_size * 0.9f, 0.1f, 1.f);
-        out.window_shape = idsp::clamp(p.window_shape + bipolar_rand(rng_state) * p.random_window_shape, 0.f, 1.f);
-        out.width        = idsp::clamp(p.width        + bipolar_rand(rng_state) * p.random_width * 7.f, 1.f, 8.f);
-
-        if (pitch_follows_speed(p, out.width)) out.pitch = out.speed;
+        out.pitch_deviation  = p.pitch_deviation;
+        out.size_deviation   = p.size_deviation;
+        out.shape_deviation  = p.shape_deviation;
+        out.grains_deviation = p.grains_deviation;
+        out.timestretch      = p.timestretch;
+        out.random_pitch     = p.random_pitch;
+        out.random_size      = p.random_size;
+        out.random_shape     = p.random_shape;
+        out.random_grains    = p.random_grains;
+        out.random_position  = p.random_position;
+        out.random_level     = p.random_level;
+        out.random_pan       = p.random_pan;
         return out;
     }
 
@@ -86,7 +78,6 @@ namespace
         out.speed  = p.speed;
         out.level  = p.level;
         out.pan    = p.pan;
-        out.loop   = p.loop;
 
         out.attack  = p.attack;
         out.decay   = p.decay;
@@ -105,12 +96,18 @@ namespace
         out.phase_level  = p.phase_level;
         out.phase_pan    = p.phase_pan;
 
-        out.pitch        = p.pitch;
-        out.window_size  = p.window_size;
-        out.window_shape = p.window_shape;
-        out.width        = p.width;
-
-        if (pitch_follows_speed(p, out.width)) out.pitch = out.speed;
+        out.pitch_deviation  = p.pitch_deviation;
+        out.size_deviation   = p.size_deviation;
+        out.shape_deviation  = p.shape_deviation;
+        out.grains_deviation = p.grains_deviation;
+        out.timestretch      = p.timestretch;
+        out.random_pitch     = p.random_pitch;
+        out.random_size      = p.random_size;
+        out.random_shape     = p.random_shape;
+        out.random_grains    = p.random_grains;
+        out.random_position  = p.random_position;
+        out.random_level     = p.random_level;
+        out.random_pan       = p.random_pan;
         return out;
     }
 }
@@ -136,25 +133,31 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
 
     const auto& p = input.parameter;
 
-    // Clear MIDI ownership for any voice that became inactive since last
-    // block (natural envelope completion, stop, or voice-stealing). If we
-    // skip this, a recycled slot could erroneously match a stale note-off.
+    // Clear MIDI ownership + latch state for any voice that became inactive
+    // since last block (natural envelope completion, stop, or voice-stealing).
+    // If we skip this, a recycled slot could erroneously match a stale note-off
+    // or carry a stale latch flag into the next voice that lands in this slot.
     for (size_t s = 0; s < voices_.size(); ++s)
     {
-        if (!voices_[s].is_active()) voice_midi_seq_[s] = 0;
+        if (!voices_[s].is_active())
+        {
+            voice_midi_seq_[s] = 0;
+            voice_latched_[s]  = false;
+        }
     }
 
     const int selected_voice = p.selected_voice;
     const bool voice_selected = (selected_voice >= 0 && static_cast<size_t>(selected_voice) < max_voices);
 
-    // --- live-edit + stop: three-state mux (Voice / Global / Auto) ---
+    // --- live-edit + stop: two-state mux (Voice / Global). Global is the
+    //     default whenever no voice is selected. ---
     if (voice_selected && voices_[selected_voice].is_active())
     {
         // Voice mode: overlay live edits onto the selected slot; stop kills it.
         voice_live_params_[selected_voice] = overlay_live_params(p);
         if (p.stop) voices_[selected_voice].kill();
     }
-    else if (p.global_mode)
+    else
     {
         // Global mode: overlay live edits onto every active voice; stop kills all.
         const VoiceLiveParams overlay = overlay_live_params(p);
@@ -164,42 +167,21 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
         }
         if (p.stop) voices_.kill_all();
     }
-    else
-    {
-        // Auto mode: sliders feed next launch (no per-voice overlay); stop kills oldest.
-        if (p.stop) voices_.kill_oldest();
-    }
 
-    // --- play: Global retriggers every active voice; Auto/Voice use the allocator ---
+    // --- play: allocate a plain (no envelope) voice. Voice mode forces it
+    //     into the selected slot; Global mode picks any free slot. The voice
+    //     loops indefinitely until stopped. ---
     if (p.play)
     {
-        if (p.global_mode)
+        const int preferred = voice_selected ? selected_voice : -1;
+        if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
         {
-            // Retrigger every active voice as plain (no envelope) — matches
-            // the play button's semantics, applied across all active slots.
-            // Drops any MIDI ownership since the voice is now play-driven.
-            for (size_t i = 0; i < voices_.size(); ++i)
-            {
-                if (!voices_[i].is_active()) continue;
-                voice_live_params_[i] = build_effective_live_params(p, rng_state_);
-                voices_[i].trigger_plain(voice_live_params_[i], buffer_size, sample_rate_, ++launch_counter_);
-                voice_midi_seq_[i] = 0;
-            }
+            const size_t slot = static_cast<size_t>(v - &voices_[0]);
+            voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
+            v->trigger_plain(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+            voice_midi_seq_[slot] = 0;
         }
-        else
-        {
-            // Play button: plain (no envelope) voice. Loops or plays-through
-            // per the loop button, terminates naturally at end of sample (if
-            // !loop) or runs until killed/stolen.
-            const int preferred = voice_selected ? selected_voice : -1;
-            if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
-            {
-                const size_t slot = static_cast<size_t>(v - &voices_[0]);
-                voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
-                v->trigger_plain(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
-            }
-            // else: fail-silent (stealing off, all voices busy)
-        }
+        // else: fail-silent (stealing off, all voices busy)
     }
 
     // --- MIDI note events ---
@@ -214,40 +196,90 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
             if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, -1))
             {
                 const size_t slot = static_cast<size_t>(v - &voices_[0]);
-                VoiceLiveParams vp = build_effective_live_params(p, rng_state_);
-                vp.level = ev.velocity;   // already squared & scaled by slider
-                // MIDI note pitch routing: bypass random_speed/random_pitch
-                // jitter for predictable response. Timestretch ON → note
-                // scales pitch only (speed stays at slider). Timestretch OFF
-                // → note scales speed and pitch tracks speed.
-                if (p.timestretch)
-                {
-                    vp.speed = p.speed;
-                    vp.pitch = p.pitch * ev.note_ratio;
-                }
-                else
-                {
-                    vp.speed = p.speed * ev.note_ratio;
-                    vp.pitch = vp.speed;
-                }
-                voice_live_params_[slot] = vp;
+                // Slider-side live params only. The MIDI per-note offsets
+                // (pitch octave shift, velocity factor) live inside Voice
+                // and are combined with these slider values during set_live_params
+                // (pitch / speed) and per-grain (level). Keeping MIDI offsets
+                // out of voice_live_params keeps the slider snapshot clean
+                // and avoids any multiply-compounding on snap-on-select.
+                voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
                 v->trigger_adsr_gated(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+                const float octave_offset = std::log2(ev.note_ratio > 0.f ? ev.note_ratio : 1.f);
+                v->set_midi_offsets(octave_offset, ev.velocity);
                 voice_midi_seq_[slot] = ev.midi_seq;
             }
             // else: all voices busy, stealing off — drop.
         }
         else
         {
-            // note-off: locate the voice that owns this MIDI seq.
+            // note-off: locate the voice that owns this MIDI seq. If the
+            // voice was latched, swallow the note-off (voice keeps looping
+            // until stop). Otherwise release the envelope normally.
             for (size_t s = 0; s < voices_.size(); ++s)
             {
                 if (voice_midi_seq_[s] == ev.midi_seq && voices_[s].is_active())
                 {
-                    voices_[s].release();
-                    voice_midi_seq_[s] = 0;
+                    if (voice_latched_[s])
+                    {
+                        voice_midi_seq_[s] = 0;
+                        voice_latched_[s]  = false;
+                    }
+                    else
+                    {
+                        voices_[s].release();
+                        voice_midi_seq_[s] = 0;
+                    }
                     break;
                 }
             }
+        }
+    }
+
+    // --- latch trigger: mark every still-gated MIDI voice as latched so
+    //     that its next note-off is swallowed. Voices already in release
+    //     (voice_midi_seq_ == 0) are skipped. ---
+    if (p.latch)
+    {
+        for (size_t i = 0; i < voices_.size(); ++i)
+        {
+            if (voices_[i].is_active() && voice_midi_seq_[i] != 0)
+                voice_latched_[i] = true;
+        }
+    }
+
+    // --- position scrub: when the GUI signals the user is dragging the
+    //     position pot, teleport the routing-target voice(s) to the slider
+    //     value. Gated by the GUI's gesture flag so the audio→GUI display
+    //     loop doesn't masquerade as user input. Voice mode → selected,
+    //     Global → all, Auto → newest. Scrub is a teleport — `speed` resumes.
+    if (p.position_scrubbing)
+    {
+        const float frac = idsp::clamp(p.position, 0.f, 1.f);
+        auto scrub = [&](size_t i)
+        {
+            if (voices_[i].is_active()) voices_[i].set_loop_position_fraction(frac);
+        };
+        if (voice_selected && voices_[selected_voice].is_active())
+        {
+            scrub(static_cast<size_t>(selected_voice));
+        }
+        else if (p.global_mode)
+        {
+            for (size_t i = 0; i < voices_.size(); ++i) scrub(i);
+        }
+        else
+        {
+            int target = -1;
+            uint64_t best = 0;
+            for (size_t i = 0; i < voices_.size(); ++i)
+            {
+                if (voices_[i].is_active() && voices_[i].launch_seq() >= best)
+                {
+                    best   = voices_[i].launch_seq();
+                    target = static_cast<int>(i);
+                }
+            }
+            if (target >= 0) scrub(static_cast<size_t>(target));
         }
     }
 
@@ -302,4 +334,39 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
         output.state.voice_volume[i]      = voices_[i].current_level();
         output.state.voice_live_params[i] = voice_live_params_[i];
     }
+
+    // Position-slider display: pick the same routing-target voice as scrub
+    // (Voice → selected, Global → first active, Auto → newest) and publish
+    // its normalized loop position. If no voice is active, hold the last
+    // published value so the slider doesn't snap.
+    int display_voice = -1;
+    if (voice_selected && voices_[selected_voice].is_active())
+    {
+        display_voice = selected_voice;
+    }
+    else if (p.global_mode)
+    {
+        for (size_t i = 0; i < voices_.size(); ++i)
+        {
+            if (voices_[i].is_active()) { display_voice = static_cast<int>(i); break; }
+        }
+    }
+    else
+    {
+        uint64_t best = 0;
+        for (size_t i = 0; i < voices_.size(); ++i)
+        {
+            if (voices_[i].is_active() && voices_[i].launch_seq() >= best)
+            {
+                best          = voices_[i].launch_seq();
+                display_voice = static_cast<int>(i);
+            }
+        }
+    }
+    if (display_voice >= 0)
+    {
+        output.state.playback_position_normalized = voices_[display_voice].loop_position_fraction();
+    }
+    // else: leave whatever was last published (no active voice means there's
+    // nothing meaningful to update with).
 }

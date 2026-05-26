@@ -9,32 +9,31 @@
 struct GuiInputData;
 struct GuiOutputData;
 
-/** Tracks the Auto / Voice N / Global radio state for the sampler.
+/** Tracks the Voice / Global radio state for the sampler.
  *
  * Lives in interface/ (not system/) because it knows about both GUI
- * concerns (the auto/global JUCE toggles, selected_voice publishing) and
+ * concerns (the global JUCE toggle, selected_voice publishing) and
  * instrument concerns (per-voice VoiceLiveParams snap/restore). It does
  * NOT know about JUCE directly — MainComponent feeds it JUCE-param
  * snapshot/apply through callbacks at construction time.
  *
  * The mode machine:
- *   - Auto   : no voice selected, global off. play() allocates a fresh slot.
- *   - Voice N: that slot is the live-edit target; sliders snap to its values.
- *   - Global : all active voices receive live edits; play/stop act on all.
- * Exactly one mode is in effect at any moment.
+ *   - Global  : default. No voice selected. Slider edits overlay all active
+ *               voices; play retriggers all; stop kills all.
+ *   - Voice N : voice N selected. Slider edits overlay only that voice;
+ *               play forces a launch into that slot; stop kills only it.
+ * Re-clicking the currently-selected voice returns to Global.
  *
  * Usage from MainComponent's GUI-thread timer:
- *   auto desired = mode_controller_.tick(read_juce_bool("auto"),
- *                                        read_juce_bool("global"));
- *   set_bool_juce("auto",   desired.auto_on);
+ *   auto desired = mode_controller_.tick(read_juce_bool("global"));
  *   set_bool_juce("global", desired.global_on);
  */
 class ModeController
 {
 public:
-    enum class Mode { Auto, Voice, Global };
+    enum class Mode { Voice, Global };
 
-    struct ButtonState { bool auto_on; bool global_on; };
+    struct ButtonState { bool global_on; };
 
     using SnapshotFn = std::function<VoiceLiveParams()>;
     using ApplyFn    = std::function<void(const VoiceLiveParams&)>;
@@ -47,10 +46,10 @@ public:
     /** Reconcile against the latest JUCE button state and return the
      *  buttons' desired state for the caller to write back. Also publishes
      *  global_mode to the audio thread. */
-    ButtonState tick(bool auto_juce, bool global_juce);
+    ButtonState tick(bool global_juce);
 
     /** Called from MainComponent when the user clicks voice button N.
-     *  Re-clicking the currently selected voice returns to Auto. */
+     *  Re-clicking the currently selected voice returns to Global. */
     void on_voice_button_clicked(size_t voice_index);
 
     Mode mode() const;
@@ -58,7 +57,6 @@ public:
     bool global_on()      const { return global_on_; }
 
 private:
-    void enter_auto_mode();
     void enter_voice_mode(size_t voice_index);
     void enter_global_mode();
 
@@ -72,7 +70,7 @@ private:
     ApplyFn               apply_juce_;
 
     int  selected_voice_{-1};
-    bool global_on_{false};
+    bool global_on_{true};   // Global is the default state
     VoiceLiveParams global_params_cache_{};
     bool global_params_cached_{false};
 };

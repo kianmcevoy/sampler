@@ -15,6 +15,8 @@ void StateInterface::load(const StateInterfaceLoadData& loaded, StateInterfaceOu
 
 void StateInterface::process(const StateInterfaceInputData& input, StateInterfaceOutputData& output)
 {
+	output.gui.playback_position_normalized.store(input.state.playback_position_normalized);
+
 	for (size_t i = 0; i < max_voices; ++i)
 	{
 		output.gui.voice_active[i].store(input.state.voice_active[i]);

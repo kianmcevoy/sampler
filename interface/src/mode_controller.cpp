@@ -12,63 +12,51 @@ ModeController::ModeController(GuiInputData& gui_input,
     snapshot_juce_{std::move(snapshot_juce_sliders)},
     apply_juce_{std::move(apply_to_juce_sliders)}
 {
-    // Default Auto: publish so the audio thread starts coherent.
+    // Default Global: publish so the audio thread starts coherent.
     gui_input_.selected_voice.store(-1);
-    gui_input_.global_mode.store(false);
+    gui_input_.global_mode.store(true);
 }
 
 ModeController::Mode ModeController::mode() const
 {
-    if (selected_voice_ >= 0) return Mode::Voice;
-    if (global_on_)           return Mode::Global;
-    return Mode::Auto;
+    return (selected_voice_ >= 0) ? Mode::Voice : Mode::Global;
 }
 
-ModeController::ButtonState ModeController::tick(bool auto_juce, bool global_juce)
+ModeController::ButtonState ModeController::tick(bool global_juce)
 {
-    // The Auto and Global JUCE bools are user-clickable. Compare them
-    // against our internal truth to detect a click and run the transition.
-    // The caller re-asserts the returned ButtonState so any accidental
-    // toggle (e.g. clicking Auto while already in Auto) snaps back.
+    // Detect a Global-button click. The caller re-asserts the returned
+    // state so accidental flips (clicking Global while already in Global)
+    // snap back without effect.
     if (global_juce != global_on_)
     {
         if (global_juce) enter_global_mode();
-        else             enter_auto_mode();
-    }
-    else
-    {
-        const bool currently_in_auto = (selected_voice_ == -1 && !global_on_);
-        if (auto_juce && !currently_in_auto)
-        {
-            enter_auto_mode();
-        }
-        // Other auto-flip cases (clicked Auto while in Auto, toggling off)
-        // are corrected by the caller re-asserting the returned state.
+        // else: user clicked Global to turn it off. With Auto removed there's
+        // no "off" state; Global stays on. The caller's set_bool_juce will
+        // re-light the button.
     }
 
     // Publish per-tick so a stale reader can't see a half-changed mode.
     gui_input_.global_mode.store(global_on_);
 
-    const bool in_auto = (selected_voice_ == -1 && !global_on_);
-    return { in_auto, global_on_ };
+    return { global_on_ };
 }
 
 void ModeController::on_voice_button_clicked(size_t voice_index)
 {
     const int requested = static_cast<int>(voice_index);
-    // Re-clicking the currently-selected voice deselects → Auto mode.
-    if (selected_voice_ == requested) enter_auto_mode();
+    // Re-clicking the currently-selected voice deselects → Global mode.
+    if (selected_voice_ == requested) enter_global_mode();
     else                              enter_voice_mode(voice_index);
 }
 
 void ModeController::enter_voice_mode(size_t voice_index)
 {
     const int new_selection = static_cast<int>(voice_index);
-    const bool was_no_voice = (selected_voice_ == -1);
+    const bool was_in_global = (selected_voice_ == -1);
 
-    // Capture current sliders as global params on transition away from
-    // no-voice so deselect can restore them.
-    if (was_no_voice)
+    // Capture current sliders as global params on transition out of Global
+    // so deselect can restore them.
+    if (was_in_global)
     {
         global_params_cache_  = snapshot_juce_();
         global_params_cached_ = true;
@@ -85,28 +73,14 @@ void ModeController::enter_voice_mode(size_t voice_index)
     }
 }
 
-void ModeController::enter_auto_mode()
+void ModeController::enter_global_mode()
 {
     const bool leaving_voice = (selected_voice_ >= 0);
 
+    // Restore the slider state we captured on entry to Voice mode.
     if (leaving_voice && global_params_cached_)
     {
         apply_juce_(global_params_cache_);
-    }
-
-    selected_voice_ = -1;
-    global_on_      = false;
-    gui_input_.selected_voice.store(-1);
-}
-
-void ModeController::enter_global_mode()
-{
-    const bool was_voice = (selected_voice_ >= 0);
-
-    if (was_voice && !global_params_cached_)
-    {
-        global_params_cache_  = snapshot_juce_();
-        global_params_cached_ = true;
     }
 
     selected_voice_ = -1;
