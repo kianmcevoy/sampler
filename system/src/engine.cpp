@@ -29,7 +29,7 @@ EngineAudioProcessor::EngineAudioProcessor()
     state_data{},
     osc_output_data{},
     utility_data{},
-	sample_buffer{},
+	layer_buffers{},
 	gui_output_data{},
 	gui_input_data{},
     parameter_interface{[this](){
@@ -37,7 +37,7 @@ EngineAudioProcessor::EngineAudioProcessor()
             .parameter = this->parameter_data,
             .utility = this->utility_data,
 			.gui = this->gui_output_data,
-			.buffer = this->sample_buffer
+			.layer_buffers = this->layer_buffers,
         };
         return ParameterInterface(data);
     }()},
@@ -281,7 +281,7 @@ void EngineAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             .parameter = this->parameter_data,
             .utility = this->utility_data,
             .gui = this->gui_output_data,
-            .buffer = this->sample_buffer,
+            .layer_buffers = this->layer_buffers,
         };
         this->parameter_interface.process(input, output);
     }
@@ -291,7 +291,7 @@ void EngineAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         {
             .audio = this->audio_data.input,
             .parameter = this->parameter_data,
-            .buffer = this->sample_buffer,
+            .layer_buffers = this->layer_buffers,
         };
         InstrumentOutputData output
         {

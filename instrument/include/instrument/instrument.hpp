@@ -50,6 +50,32 @@ class Instrument
         // edits take effect immediately.
         std::array<VoiceLiveParams, max_voices> voice_live_params_{};
 
+        // The most recent VoiceLiveParams actually pushed into each voice via
+        // set_live_params. voice_live_params_ above stores the trigger-time
+        // snapshot (anchor for scaling pickup), so off-layer voices in Global
+        // mode would otherwise snap back to that trigger value whenever the
+        // user wandered away to another layer. This array remembers what they
+        // were last actually playing so they stay there until the user returns
+        // and edits them again.
+        std::array<VoiceLiveParams, max_voices> voice_effective_params_{};
+
+        // Per-voice slider-axis anchor for Global-mode value-scaling pickup.
+        // Captured at every trigger (and re-snapped on Voice-mode override).
+        // Paired with the trigger-time effective values in voice_live_params_
+        // to form the (slider, voice) pickup point — moving a playback slider
+        // in Global mode scales each voice relative to its own anchor.
+        std::array<VoiceSliderAnchor, max_voices> voice_anchor_{};
+
+        // Position-scrub anchor for Global-mode value-scaling pickup. Captured
+        // on the rising edge of position_scrubbing (the start of a drag),
+        // discarded implicitly on the falling edge. The (position_slider_anchor_,
+        // voice_position_anchor_[i]) pair defines each voice's pickup point so
+        // the scrub scales each voice from where it was at grab-time instead
+        // of teleporting every voice to the same slider value.
+        std::array<float, max_voices> voice_position_anchor_{};
+        float position_slider_anchor_{0.f};
+        bool  position_scrubbing_prev_{false};
+
         // Per-voice MIDI ownership. Non-zero ⇒ the voice is currently held by
         // a MIDI note with that sequence number; zero ⇒ not MIDI-owned (manual
         // play, envelope_trigger, or finished MIDI note). Used to route note-off

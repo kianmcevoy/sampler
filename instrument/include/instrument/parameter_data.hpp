@@ -85,6 +85,25 @@ struct VoiceLiveParams
 	float random_pan      { 0.f };  // jitters per-grain stereo position
 };
 
+/** Per-voice slider-axis anchor for value-scaling pickup.
+ *
+ * Captured at trigger time alongside the voice's effective live params. While
+ * the voice is alive in Global mode, the 5 playback sliders are interpreted
+ * relative to this anchor: as the slider moves away from `anchor`, the voice
+ * value scales toward the slider's min or max (piecewise linear through
+ * (anchor, voice_value)). Returning the slider to `anchor` restores the
+ * voice's original (post-random) value; pushing to either extreme collapses
+ * all voices onto the slider value.
+ */
+struct VoiceSliderAnchor
+{
+	float start  { 0.f };
+	float length { 1.f };
+	float speed  { 1.f };
+	float level  { 1.f };
+	float pan    { 0.5f };
+};
+
 /** Per-block MIDI note event published by ParameterInterface to Instrument.
  *
  * `midi_seq` is a monotonic counter assigned at note-on; the matching
@@ -102,6 +121,9 @@ struct MidiNoteEvent
 	                      // compound it).
 	float    note_ratio;  // pure 2^((note-60)/12) pitch ratio — Voice combines
 	                      // it with the slider pitch/speed via set_midi_offsets.
+	int      note_number; // raw MIDI note in [0, 127]; only meaningful for
+	                      // note_on events. Consumed by Position routing to
+	                      // map a note to a marker / start fraction.
 };
 
 struct ParameterData
@@ -118,6 +140,8 @@ struct ParameterData
 	bool stop;
 	bool latch;
 	bool timestretch;
+	bool loop;            // true ⇒ voices loop indefinitely (default).
+	                      // false ⇒ voices self-terminate at end of region.
 	float position;          // [0, 1] — bidirectional pos-knob (scrub + display)
 	bool position_scrubbing; // true while the user is dragging the position pot
 
@@ -175,6 +199,41 @@ struct ParameterData
 	// `play` retriggers every active voice in unison, `stop` kills all.
 	// Mutually exclusive with selected_voice >= 0 (GUI radio invariant).
 	bool global_mode { false };
+
+	// Markers: when enabled, start/length are snapped by ParameterInterface
+	// to discrete marker positions before reaching the instrument. marker_type
+	// 0 = time (evenly spaced grid), 1 = transient (from onset detection).
+	// resolution selects how many markers (1..64) are active.
+	bool markers_enabled { false };
+	int  marker_type     { 0 };
+	int  resolution      { 8 };
+
+	// MIDI note routing. 0 = Pitch (note shifts speed by 2^((note-60)/12) as
+	// before). 1 = Position (note picks a start fraction / marker; pitch is
+	// left untouched). Consumed by the Instrument's MIDI note-on handler.
+	int  note_route_mode { 0 };
+
+	// Currently selected layer (0..max_layers-1). New triggers tag voices
+	// with this index; the instrument routes each voice's process call to
+	// layer_buffers[v.layer()] regardless of the current value, so existing
+	// voices keep playing their original layer when the user switches.
+	int  current_layer { 0 };
+
+	// Kill every active voice on every layer (vs the per-layer `stop`).
+	// Fires once per click via the standard trigger semantics.
+	bool stop_all { false };
+
+	// Effective marker context for the instrument, refreshed each block.
+	// marker_count is the actual N in use (transient may be less than
+	// resolution if the sample has fewer onsets). start_marker is the index
+	// the slider snapped to; length_markers is the span (1..N-start_marker).
+	// marker_fractions[0..marker_count) are the marker sample positions as
+	// [0, 1] fractions of buffer length. Used by the instrument to quantise
+	// per-launch random jitter onto marker positions.
+	int                   marker_count    { 0 };
+	int                   start_marker    { 0 };
+	int                   length_markers  { 1 };
+	std::array<float, 64> marker_fractions {};
 
 	std::array<VoiceLiveParams, max_voices> voice_live_params {};
 

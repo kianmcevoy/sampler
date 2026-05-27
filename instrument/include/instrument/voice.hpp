@@ -60,6 +60,17 @@ public:
 
     void kill();
 
+    /** Override whether the voice loops at its region end. Trigger functions
+     *  install a default (play/MIDI = looping, AR = one-shot); the Instrument
+     *  calls this after a trigger to honour the user-facing Loop toggle. */
+    void set_sample_loops(bool loops) { sample_loops_ = loops; }
+
+    /** The layer this voice belongs to. The Instrument calls set_layer
+     *  immediately after each trigger with the current_layer at the time of
+     *  trigger. Voice::process is then driven from layer_buffers[layer()]. */
+    void set_layer(int layer_index) { layer_index_ = layer_index; }
+    int  layer() const { return layer_index_; }
+
     /** Begin release. Only meaningful in ADSR mode; no-op otherwise so a
      *  stray MIDI note-off can't disturb a play/envelope-trigger voice. */
     void release();
@@ -126,6 +137,7 @@ private:
     float  base_pan_r_{0.f};
     bool   sample_loops_{false};
     bool   forward_{true};
+    int    layer_index_{0};  // which layer's sample buffer this voice plays from
 
     // Envelope durations / sustain level (resolved against loop scaling).
     size_t env_attack_{0};

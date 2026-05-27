@@ -70,6 +70,10 @@ MainComponent::MainComponent(EngineAudioProcessor& processor_, EngineAudioProces
     // Default mode is Global (no Auto state any more) — light the Global LED.
     this->set_bool_juce("global", true);
 
+    // Seed every layer's snapshot from the current JUCE defaults so the first
+    // layer-switch restores sane values instead of zeroing everything.
+    for (size_t i = 0; i < max_layers; ++i) this->save_juce_into_layer(i);
+
     // Initial panel selection.
     this->set_active_panel("main");
 }
@@ -137,13 +141,28 @@ void MainComponent::timerCallback()
 {
     this->check_file_chooser_request();
 
-    // Drive voice button LED brightness from the audio thread's per-voice
-    // amplitude so the LED fades with the envelope.
+    // Enforce the voice_view ↔ layer_view radio + publish layer_view state.
+    this->enforce_view_radio();
+
     const auto& gui_output = this->processor.get_gui_output_data();
-    for (size_t i = 0; i < this->main_panel.num_voice_buttons(); ++i)
+
+    if (this->layer_view_)
     {
-        const size_t slot = this->main_panel.voice_slot_for_button(i);
-        this->main_panel.set_voice_brightness(i, gui_output.voice_volume[slot].load());
+        // Layer view: voice buttons take their brightness from each layer's
+        // summed envelope (not per-voice), and their colour from current vs
+        // other-active. Mode controller still ticks (so the Global JUCE param
+        // stays consistent) but the per-voice visuals it drives are
+        // overwritten by refresh_layer_button_visuals.
+        this->refresh_layer_button_visuals();
+    }
+    else
+    {
+        // Voice view: per-voice LED brightness (current behaviour).
+        for (size_t i = 0; i < this->main_panel.num_voice_buttons(); ++i)
+        {
+            const size_t slot = this->main_panel.voice_slot_for_button(i);
+            this->main_panel.set_voice_brightness(i, gui_output.voice_volume[slot].load());
+        }
     }
 
     // Bidirectional position slider — write the audio-published playback
@@ -166,11 +185,102 @@ void MainComponent::timerCallback()
     // JUCE button reads/writes and refresh voice-button selection visuals.
     const auto desired = this->mode_controller_.tick(this->read_juce_bool("global"));
     this->set_bool_juce("global", desired.global_on);
-    this->refresh_voice_button_visuals();
+    if (!this->layer_view_)
+    {
+        this->refresh_voice_button_visuals();
+    }
+}
+
+void MainComponent::enforce_view_radio()
+{
+    const bool voice_on = this->read_juce_bool("voice_view");
+    const bool layer_on = this->read_juce_bool("layer_view");
+
+    bool new_layer_view = this->layer_view_;
+    if (voice_on && layer_on)
+    {
+        // Both on — the one the user just toggled is the loser. Drop the
+        // one we previously had on and keep the new one.
+        if (this->layer_view_)
+        {
+            new_layer_view = false;          // user just turned voice_view ON
+            this->set_bool_juce("layer_view", false);
+        }
+        else
+        {
+            new_layer_view = true;           // user just turned layer_view ON
+            this->set_bool_juce("voice_view", false);
+        }
+    }
+    else if (!voice_on && !layer_on)
+    {
+        // Both off — restore the previous view (voice view is the default).
+        if (this->layer_view_) this->set_bool_juce("layer_view", true);
+        else                   this->set_bool_juce("voice_view", true);
+    }
+    else
+    {
+        new_layer_view = layer_on;
+    }
+
+    if (new_layer_view != this->layer_view_)
+    {
+        this->layer_view_ = new_layer_view;
+        this->processor.get_gui_input_data().layer_view.store(new_layer_view);
+        if (new_layer_view)
+        {
+            // Entering layer view: drop any voice selection so Voice mode
+            // doesn't survive into a context where the buttons mean layers.
+            this->mode_controller_.deselect_voice();
+            this->refresh_voice_button_visuals();
+        }
+    }
+}
+
+void MainComponent::refresh_layer_button_visuals()
+{
+    const auto& gui_output = this->processor.get_gui_output_data();
+    for (size_t i = 0; i < this->main_panel.num_voice_buttons(); ++i)
+    {
+        // Voice button index 0..7 doubles as layer index 0..7 in layer view.
+        const size_t layer_idx = this->main_panel.voice_slot_for_button(i);
+        const float  env = gui_output.layer_summed_envelope[layer_idx].load();
+        const bool   has = gui_output.layer_has_active_voices[layer_idx].load();
+        this->main_panel.set_voice_brightness(i, env);
+
+        const bool is_current = (static_cast<int>(layer_idx) == this->current_layer_);
+        juce::Colour bg;
+        if (is_current)
+            bg = igui::colours::gold.withAlpha(0.25f);
+        else if (has)
+            bg = igui::colours::grey.withAlpha(0.25f);
+        else
+            bg = igui::colours::dark_grey;
+        this->main_panel.set_voice_background_colour(i, bg);
+    }
 }
 
 void MainComponent::on_voice_button_clicked(size_t voice_index)
 {
+    if (this->layer_view_)
+    {
+        // Layer view: voice button N selects layer N. selected_voice stays
+        // at -1 throughout layer view (cleared on entry by enforce_view_radio).
+        const int new_layer = static_cast<int>(voice_index);
+        if (new_layer != this->current_layer_)
+        {
+            // Snap-on-select for layers: save current slider/button/dropdown
+            // values into the layer we're leaving, then restore the layer
+            // we're entering.
+            this->save_juce_into_layer(static_cast<size_t>(this->current_layer_));
+            this->restore_layer_into_juce(static_cast<size_t>(new_layer));
+            this->current_layer_ = new_layer;
+            this->processor.get_gui_input_data().selected_layer.store(new_layer);
+        }
+        this->refresh_layer_button_visuals();
+        return;
+    }
+
     this->mode_controller_.on_voice_button_clicked(voice_index);
     // Sync the global JUCE param to the new mode IMMEDIATELY so the next
     // timer tick doesn't see stale state.
@@ -229,6 +339,62 @@ float MainComponent::read_float_juce(const juce::String& id, float fallback) con
         }
     }
     return fallback;
+}
+
+void MainComponent::set_choice_juce(const juce::String& id, int index)
+{
+    for (auto* cp : this->processor.choice_params)
+    {
+        if (cp->getParameterID() == id)
+        {
+            cp->setValueNotifyingHost(cp->convertTo0to1(static_cast<float>(index)));
+            return;
+        }
+    }
+}
+
+bool MainComponent::is_per_layer_param(const juce::String& id) const
+{
+    // View / session state — not part of any layer's snapshot.
+    return id != "voice_view"
+        && id != "layer_view"
+        && id != "global";
+}
+
+void MainComponent::save_juce_into_layer(size_t layer_index)
+{
+    auto& snap = this->layer_param_snapshots_[layer_index];
+    snap.sliders.clear();
+    snap.buttons.clear();
+    snap.dropdowns.clear();
+    for (size_t i = 0; i < this->processor.float_params.size(); ++i)
+    {
+        const auto* fp = this->processor.float_params[i];
+        const auto id = fp->getParameterID();
+        if (!is_per_layer_param(id)) continue;
+        const auto& range = this->processor.float_param_ranges[i];
+        snap.sliders[id] = range.convertFrom0to1(fp->get());
+    }
+    for (const auto* bp : this->processor.bool_params)
+    {
+        const auto id = bp->getParameterID();
+        if (!is_per_layer_param(id)) continue;
+        snap.buttons[id] = bp->get();
+    }
+    for (const auto* cp : this->processor.choice_params)
+    {
+        const auto id = cp->getParameterID();
+        if (!is_per_layer_param(id)) continue;
+        snap.dropdowns[id] = cp->getIndex();
+    }
+}
+
+void MainComponent::restore_layer_into_juce(size_t layer_index)
+{
+    const auto& snap = this->layer_param_snapshots_[layer_index];
+    for (const auto& [id, value] : snap.sliders)   this->set_float_juce(id, value);
+    for (const auto& [id, value] : snap.buttons)   this->set_bool_juce (id, value);
+    for (const auto& [id, value] : snap.dropdowns) this->set_choice_juce(id, value);
 }
 
 void MainComponent::refresh_voice_button_visuals()

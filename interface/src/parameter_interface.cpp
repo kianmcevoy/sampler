@@ -1,18 +1,20 @@
 #include "interface/parameter_interface.hpp"
 #include "JuceHeader.h"
 #include "idsp/functions.hpp"
+#include "instrument/onset.hpp"
 #include "system/asset_manager.hpp"
 
 #include <cmath>
+#include <vector>
 
 
 ParameterInterface::ParameterInterface(ParameterInterfaceOutputData& output)
 {
-	// Pre-load the bundled default sample so the sampler is usable without
-	// going through the file chooser first. Start / length default to the
-	// full file.
+	// Pre-load the bundled default sample into layer 0 so the sampler is
+	// usable without going through the file chooser first. selected_layer
+	// defaults to 0, so this is also the layer the GUI displays at launch.
 	const auto default_sample = AssetManager::get_resource_file("gui/assets/voice.wav");
-	if (load_sample_into_buffer(default_sample, output, 0.0f, 1.0f))
+	if (load_sample_into_buffer(default_sample, output.layer_buffers[0], output.gui, 0.0f, 1.0f))
 	{
 		// Trigger a GUI repaint of the waveform once the panels come up.
 		output.gui.file_loaded.store(true);
@@ -34,8 +36,10 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 	// gui/src/controls.cpp), so no rescaling is needed here.
 	output.parameter.play        = input.controls.triggers.at("play");
 	output.parameter.stop        = input.controls.triggers.at("stop");
+	output.parameter.stop_all    = input.controls.triggers.at("stop_all");
 	output.parameter.latch       = input.controls.triggers.at("latch");
 	output.parameter.timestretch = input.controls.buttons.at("timestretch");
+	output.parameter.loop        = input.controls.buttons.at("loop");
 	output.parameter.position    = input.controls.sliders.at("position");
 	// Modwheel sums with the start slider, clamped to [0, 1].
 	output.parameter.start  = idsp::clamp(input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
@@ -88,13 +92,114 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
     output.parameter.global_mode        = input.gui.global_mode.load();
     output.parameter.position_scrubbing = input.gui.position_scrubbing.load();
 
+    // Layer routing. selected_layer chooses which buffer marker/snap reads
+    // see, where new triggers land, and which waveform the GUI displays.
+    {
+        const int sel = idsp::clamp(input.gui.selected_layer.load(),
+                                    0, static_cast<int>(max_layers) - 1);
+        output.parameter.current_layer = sel;
+        // Republish waveform on layer-switch so the display swaps even if no
+        // new sample was loaded into the newly-selected layer.
+        if (sel != last_published_layer_)
+        {
+            publish_waveform(output.layer_buffers[sel], output.gui,
+                             input.controls.sliders.at("start"),
+                             input.controls.sliders.at("length"));
+            last_published_layer_ = sel;
+        }
+    }
+
+    // --- markers: read controls, optionally snap start/length, publish to GUI.
+    const bool markers_on = input.controls.buttons.at("markers");
+    const size_t mtype    = input.controls.dropdowns.at("marker_type");
+    const int resolution  = static_cast<int>(input.controls.sliders.at("resolution"));
+    output.parameter.markers_enabled = markers_on;
+    output.parameter.marker_type     = static_cast<int>(mtype);
+    output.parameter.resolution      = resolution;
+
+    output.parameter.note_route_mode = static_cast<int>(input.controls.dropdowns.at("note_route"));
+
+    // Marker / waveform reads always target the currently-selected layer.
+    const SampleBuffer& active_buffer = output.layer_buffers[output.parameter.current_layer];
+    const int buffer_size = static_cast<int>(active_buffer.loaded_sample.channel(0).size());
+
+    if (markers_on && buffer_size > 0)
+    {
+        // Build the effective marker array (sample indices, sorted ascending).
+        std::array<int, 64> markers{};
+        int N = 0;
+        if (mtype == 0)
+        {
+            N = idsp::clamp(resolution, 1, 64);
+            for (int i = 0; i < N; ++i)
+                markers[i] = static_cast<int>(static_cast<float>(i) / static_cast<float>(N) * static_cast<float>(buffer_size));
+        }
+        else
+        {
+            N = idsp::min(resolution, active_buffer.transient_count);
+            for (int i = 0; i < N; ++i) markers[i] = active_buffer.transient_indices[i];
+        }
+
+        if (N > 0)
+        {
+            // Snap start: slider [0,1] picks a marker index. Modwheel still applies
+            // before the snap so MIDI-driven offsets walk through markers too.
+            const float start_slider = idsp::clamp(
+                input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
+            const int start_marker = idsp::clamp(
+                static_cast<int>(start_slider * static_cast<float>(N)), 0, N - 1);
+            const float start_frac = static_cast<float>(markers[start_marker]) / static_cast<float>(buffer_size);
+
+            // Snap length: slider [0,1] maps to [1, N - start_marker] markers.
+            // End fraction is the next marker after the span, or end-of-buffer
+            // when the span runs out.
+            const float length_slider = idsp::clamp(input.controls.sliders.at("length"), 0.f, 1.f);
+            const int length_markers = idsp::clamp(
+                static_cast<int>(length_slider * static_cast<float>(N)) + 1, 1, N - start_marker);
+            const int end_marker_idx = start_marker + length_markers;
+            const float end_frac = (end_marker_idx < N)
+                ? static_cast<float>(markers[end_marker_idx]) / static_cast<float>(buffer_size)
+                : 1.f;
+
+            output.parameter.start  = start_frac;
+            output.parameter.length = end_frac - start_frac;
+
+            // Publish marker context so the instrument's per-launch random
+            // jitter can quantise onto marker positions instead of producing
+            // continuous values that drift off the marker grid.
+            output.parameter.marker_count   = N;
+            output.parameter.start_marker   = start_marker;
+            output.parameter.length_markers = length_markers;
+            for (int i = 0; i < N;  ++i)
+                output.parameter.marker_fractions[i] =
+                    static_cast<float>(markers[i]) / static_cast<float>(buffer_size);
+            for (int i = N; i < 64; ++i)
+                output.parameter.marker_fractions[i] = 0.f;
+        }
+        else
+        {
+            output.parameter.marker_count = 0;
+        }
+
+        for (int i = 0; i < N;  ++i) output.gui.marker_positions[i].store(markers[i]);
+        for (int i = N; i < 64; ++i) output.gui.marker_positions[i].store(-1);
+        output.gui.marker_count.store(N);
+    }
+    else
+    {
+        output.parameter.marker_count = 0;
+        output.gui.marker_count.store(0);
+    }
+
 	if (output.gui.waveform_ready.load() && !output.gui.waveform_left.empty())
 	{
 		const int num_samples = static_cast<int>(output.gui.waveform_left.size());
 		if (num_samples > 0)
 		{
-			const int start_point = static_cast<int>(input.controls.sliders.at("start") * num_samples);
-			const int duration = idsp::max(static_cast<int>(input.controls.sliders.at("length") * num_samples), 1);
+			// Use the (post-modwheel, post-snap) parameter values so the gold
+			// range markers track what's actually playing.
+			const int start_point = static_cast<int>(output.parameter.start * num_samples);
+			const int duration = idsp::max(static_cast<int>(output.parameter.length * num_samples), 1);
 			output.gui.display_marker_start = idsp::clamp(start_point, 0, num_samples - 1);
 			output.gui.display_marker_end   = idsp::min(start_point + duration, num_samples);
 		}
@@ -118,7 +223,12 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 		const auto& file_path = input.gui.sample_file_path;
 		if (!file_path.empty())
 		{
-			this->load_sample_into_buffer(juce::File(file_path), output,
+			// Load into the currently-selected layer's buffer. Layers other
+			// than the selected one are untouched, so existing voices on those
+			// layers keep playing their original sample.
+			this->load_sample_into_buffer(juce::File(file_path),
+			                        output.layer_buffers[output.parameter.current_layer],
+			                        output.gui,
 			                        input.controls.sliders.at("start"),
 			                        input.controls.sliders.at("length"));
 		}
@@ -128,9 +238,12 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
 	}
 }
 
-// Load the audio file at `audio_file` into both the playback delay lines and
-// display waveform buffer. Initialises gui.display_marker_start / _end from the supplied slider positions. Returns true on success.
-bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file, ParameterInterfaceOutputData& output, float start_slider, float length_slider)
+// Load `audio_file` into `target` (one layer's buffer) and publish its
+// waveform + display markers to `gui`. The caller picks the layer; callers
+// today always load the currently-selected layer so the display matches.
+bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file,
+                                                 SampleBuffer& target, GuiOutputData& gui,
+                                                 float start_slider, float length_slider)
 {
     if (!audio_file.existsAsFile()) return false;
 
@@ -145,9 +258,9 @@ bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file, P
     constexpr int max_samples = 524288;
     const int num_samples = idsp::min(static_cast<int>(reader->lengthInSamples), max_samples);
 
-    output.buffer.loaded_sample.resize(num_samples);
-    output.buffer.sample[0].reset();
-    output.buffer.sample[1].reset();
+    target.loaded_sample.resize(num_samples);
+    target.sample[0].reset();
+    target.sample[1].reset();
 
     if (num_channels == 1)
     {
@@ -157,10 +270,10 @@ bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file, P
 
         for (int i = 0; i < num_samples; ++i)
         {
-            output.buffer.loaded_sample.channel(0)[i] = temp_buffer[i];
-            output.buffer.loaded_sample.channel(1)[i] = temp_buffer[i];
-            output.buffer.sample[0].write(temp_buffer[i]);
-            output.buffer.sample[1].write(temp_buffer[i]);
+            target.loaded_sample.channel(0)[i] = temp_buffer[i];
+            target.loaded_sample.channel(1)[i] = temp_buffer[i];
+            target.sample[0].write(temp_buffer[i]);
+            target.sample[1].write(temp_buffer[i]);
         }
     }
     else
@@ -173,29 +286,65 @@ bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file, P
 
         for (int i = 0; i < num_samples; ++i)
         {
-            output.buffer.loaded_sample.channel(0)[i] = temp_buffer_l[i];
-            output.buffer.loaded_sample.channel(1)[i] = temp_buffer_r[i];
-            output.buffer.sample[0].write(temp_buffer_l[i]);
-            output.buffer.sample[1].write(temp_buffer_r[i]);
+            target.loaded_sample.channel(0)[i] = temp_buffer_l[i];
+            target.loaded_sample.channel(1)[i] = temp_buffer_r[i];
+            target.sample[0].write(temp_buffer_l[i]);
+            target.sample[1].write(temp_buffer_r[i]);
         }
     }
 
-    output.buffer.loaded_sample.update();
+    target.loaded_sample.update();
+
+    // Onset detection — runs synchronously on the audio thread, same as the
+    // surrounding file I/O. Produces up to 64 transient sample indices for
+    // marker mode. Mono mixdown is L+R averaged.
+    {
+        std::vector<float> mono(static_cast<size_t>(num_samples));
+        for (int i = 0; i < num_samples; ++i)
+        {
+            mono[static_cast<size_t>(i)] = 0.5f * (target.loaded_sample.channel(0)[i]
+                                                  + target.loaded_sample.channel(1)[i]);
+        }
+        const auto onsets = idsp::detect_onsets(
+            mono.data(), static_cast<size_t>(num_samples),
+            static_cast<float>(reader->sampleRate));
+        target.transient_indices  = onsets.indices;
+        target.transient_count    = onsets.count;
+        target.loaded_sample_rate = static_cast<float>(reader->sampleRate);
+    }
+
+    publish_waveform(target, gui, start_slider, length_slider);
+    return true;
+}
+
+void ParameterInterface::publish_waveform(const SampleBuffer& target, GuiOutputData& gui,
+                                          float start_slider, float length_slider)
+{
+    const int num_samples = static_cast<int>(target.loaded_sample.channel(0).size());
+    if (num_samples <= 0)
+    {
+        // Layer with no sample loaded — clear the display.
+        gui.waveform_ready.store(false);
+        gui.waveform_left.clear();
+        gui.waveform_right.clear();
+        gui.display_marker_start.store(0);
+        gui.display_marker_end.store(0);
+        return;
+    }
 
     const int start_point = static_cast<int>(start_slider * num_samples);
     const int duration    = idsp::max(static_cast<int>(length_slider * num_samples), 1);
-    output.gui.display_marker_start = idsp::clamp(start_point, 0, num_samples - 1);
-    output.gui.display_marker_end   = idsp::min(start_point + duration, num_samples);
+    gui.display_marker_start = idsp::clamp(start_point, 0, num_samples - 1);
+    gui.display_marker_end   = idsp::min(start_point + duration, num_samples);
 
-    output.gui.waveform_left.resize(num_samples);
-    output.gui.waveform_right.resize(num_samples);
+    gui.waveform_left.resize(num_samples);
+    gui.waveform_right.resize(num_samples);
     for (int i = 0; i < num_samples; ++i)
     {
-        output.gui.waveform_left[i]  = output.buffer.loaded_sample.channel(0)[i];
-        output.gui.waveform_right[i] = output.buffer.loaded_sample.channel(1)[i];
+        gui.waveform_left[i]  = target.loaded_sample.channel(0)[i];
+        gui.waveform_right[i] = target.loaded_sample.channel(1)[i];
     }
-    output.gui.waveform_ready.store(true);
-    return true;
+    gui.waveform_ready.store(true);
 }
 
 void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
@@ -250,6 +399,7 @@ void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
                 /*midi_seq=*/seq,
                 /*velocity=*/velocity_factor,
                 /*note_ratio=*/ratio,
+                /*note_number=*/static_cast<int>(d.note),
             };
         }
         else if (t == imidi::MessageType::NoteOff)
@@ -284,6 +434,7 @@ void ParameterInterface::emit_note_off(uint8_t note, ParameterData& out)
                     /*midi_seq=*/slot.midi_seq,
                     /*velocity=*/0.f,
                     /*note_ratio=*/0.f,
+                    /*note_number=*/0,
                 };
             }
             slot = ActiveNote{};   // clear

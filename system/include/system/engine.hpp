@@ -107,10 +107,10 @@ class EngineAudioProcessor  : public juce::AudioProcessor
         const GuiInputData& get_gui_input_data() const
             { return this->gui_input_data; }
 
-        SampleBuffer& get_sample_buffer()
-            { return this->sample_buffer; }
-        const SampleBuffer& get_sample_buffer() const
-            { return this->sample_buffer; }
+        std::array<SampleBuffer, max_layers>& get_layer_buffers()
+            { return this->layer_buffers; }
+        const std::array<SampleBuffer, max_layers>& get_layer_buffers() const
+            { return this->layer_buffers; }
 
         const GuiControlBuilder& get_gui_control_builder() const
             { return this->gui_control_builder; }
@@ -135,7 +135,7 @@ class EngineAudioProcessor  : public juce::AudioProcessor
         StateData state_data;
         OscOutputData osc_output_data;
         UtilityData utility_data;
-		SampleBuffer sample_buffer;
+		std::array<SampleBuffer, max_layers> layer_buffers;
 		GuiOutputData gui_output_data;
 		GuiInputData gui_input_data;
 

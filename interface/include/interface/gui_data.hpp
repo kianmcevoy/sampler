@@ -31,6 +31,13 @@ struct GuiOutputData
 	std::array<std::atomic<bool>, max_voices>  voice_active;
 	std::array<std::atomic<float>, max_voices> voice_position;
 	std::array<std::atomic<float>, max_voices> voice_volume;
+	std::array<std::atomic<int>,   max_voices> voice_layer    {};
+
+	// Per-layer aggregates for layer-view voice button LEDs. has_active is
+	// true iff at least one voice on that layer is alive; summed_envelope is
+	// the sum of current envelope×level for those voices.
+	std::array<std::atomic<bool>,  max_layers> layer_has_active_voices {};
+	std::array<std::atomic<float>, max_layers> layer_summed_envelope   {};
 
 	// Current playback position as a fraction [0, 1] of the active loop
 	// region. Drives the bidirectional `position` slider — GUI timer reads
@@ -50,6 +57,13 @@ struct GuiOutputData
 	std::vector<float> waveform_left;
 	std::vector<float> waveform_right;
 	std::atomic<bool> waveform_ready { false };
+
+	// Effective marker positions (sample indices) for the currently-enabled
+	// marker mode + resolution. ParameterInterface refreshes these each block
+	// when markers_enabled is true; marker_count == 0 means "no markers
+	// active, GUI should draw nothing". Entries past marker_count are -1.
+	std::array<std::atomic<int>, 64> marker_positions{};
+	std::atomic<int>                 marker_count{0};
 };
 
 struct GuiInputData
@@ -76,6 +90,17 @@ struct GuiInputData
 	// as a user command while this is true. Avoids the feedback loop where
 	// audio's own echoed-back position would otherwise look like user input.
 	std::atomic<bool> position_scrubbing { false };
+
+	// Currently selected layer (0..max_layers-1). Written by MainComponent
+	// when the user clicks a layer-view button. Drives which sample buffer
+	// loads target, which buffer's waveform / markers the GUI displays, and
+	// which layer new triggers (play / MIDI / envelope_trigger) tag voices
+	// with. Existing voices keep playing their original layer.
+	std::atomic<int>  selected_layer { 0 };
+
+	// Layer-view radio: false ⇒ voice view (voice buttons select voices),
+	// true ⇒ layer view (voice buttons select layers).
+	std::atomic<bool> layer_view { false };
 };
 
 #endif

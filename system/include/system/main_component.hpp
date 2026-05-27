@@ -1,6 +1,7 @@
 #ifndef GUI_MAIN_COMPONENT_H
 #define GUI_MAIN_COMPONENT_H
 
+#include "instrument/constants.hpp"
 #include "instrument/parameter_data.hpp"
 #include "interface/mode_controller.hpp"
 #include "system/panels.hpp"
@@ -9,8 +10,10 @@
 
 #include "JuceHeader.h"
 
+#include <array>
 #include <cstddef>
 #include <functional>
+#include <map>
 #include <memory>
 
 class EngineAudioProcessor;
@@ -128,6 +131,24 @@ private:
 
     void refresh_voice_button_visuals();
 
+    // Layer view: re-paints the voice buttons as layer selectors, drawing
+    // brightness from the audio thread's per-layer summed envelopes and
+    // colour from "current layer" (gold) vs "other-active layer" (grey).
+    void refresh_layer_button_visuals();
+
+    // Radio invariant for voice_view ↔ layer_view JUCE buttons. When the
+    // user clicks one, MainComponent un-clicks the other and clears the
+    // voice selection (Voice mode doesn't survive into Layer view).
+    void enforce_view_radio();
+
+    // Tracks the current layer (mirrors gui_input.selected_layer). Written
+    // by on_voice_button_clicked while in layer view; read by the timer to
+    // paint the gold-vs-grey background.
+    int  current_layer_ { 0 };
+    // Latches the view state from JUCE so transitions can be detected
+    // between ticks (for clearing selected_voice when entering layer view).
+    bool layer_view_    { false };
+
     // Bulk JUCE param read/write of the per-voice live-editable set
     // (driven by interface/voice_param_table.hpp).
     void apply_params_to_juce(const VoiceLiveParams& p);
@@ -139,6 +160,24 @@ private:
     bool  read_juce_bool (const juce::String& id) const;
     void  set_float_juce (const juce::String& id, float displayed_value);
     float read_float_juce(const juce::String& id, float fallback) const;
+    void  set_choice_juce(const juce::String& id, int index);
+
+    // Per-layer parameter snapshots for layer-switch snap-to-saved-state.
+    // sliders store displayed values; dropdowns store selected indices.
+    // Excludes triggers (momentary), voice buttons, voice_view/layer_view,
+    // and the global toggle — all of which are view/session state, not
+    // per-layer.
+    struct LayerParamSnapshot
+    {
+        std::map<juce::String, float> sliders;
+        std::map<juce::String, bool>  buttons;
+        std::map<juce::String, int>   dropdowns;
+    };
+    std::array<LayerParamSnapshot, max_layers> layer_param_snapshots_ {};
+
+    void save_juce_into_layer (size_t layer_index);
+    void restore_layer_into_juce(size_t layer_index);
+    bool is_per_layer_param   (const juce::String& id) const;
 };
 
 /// @brief Gets the main component by searching up the component tree.

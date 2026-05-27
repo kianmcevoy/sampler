@@ -29,8 +29,29 @@ namespace
     VoiceLiveParams build_effective_live_params(const ParameterData& p, uint32_t& rng_state)
     {
         VoiceLiveParams out;
-        out.start  = idsp::clamp(p.start  + bipolar_rand(rng_state) * p.random_start,  0.f, 1.f);
-        out.length = idsp::clamp(p.length + bipolar_rand(rng_state) * p.random_length, 0.f, 1.f);
+        if (p.markers_enabled && p.marker_count > 0)
+        {
+            // Marker mode: jitter the integer marker index (rounded), so a
+            // launch always lands on a marker. random_start=1 spans the whole
+            // marker grid. Length jitters in marker counts the same way.
+            const int N = p.marker_count;
+            const int start_jit = static_cast<int>(std::round(
+                bipolar_rand(rng_state) * p.random_start * static_cast<float>(N - 1)));
+            const int s_marker = idsp::clamp(p.start_marker + start_jit, 0, N - 1);
+            out.start = p.marker_fractions[s_marker];
+
+            const int length_jit = static_cast<int>(std::round(
+                bipolar_rand(rng_state) * p.random_length * static_cast<float>(N - 1)));
+            const int span = idsp::clamp(p.length_markers + length_jit, 1, N - s_marker);
+            const int end_idx = s_marker + span;  // exclusive
+            const float end_frac = (end_idx < N) ? p.marker_fractions[end_idx] : 1.f;
+            out.length = end_frac - out.start;
+        }
+        else
+        {
+            out.start  = idsp::clamp(p.start  + bipolar_rand(rng_state) * p.random_start,  0.f, 1.f);
+            out.length = idsp::clamp(p.length + bipolar_rand(rng_state) * p.random_length, 0.f, 1.f);
+        }
         out.speed  = p.speed + bipolar_rand(rng_state) * p.random_speed * 8.f;
         out.level  = p.level;   // per-grain jitter applied inside Voice
         out.pan    = p.pan;     // per-grain jitter applied inside Voice
@@ -65,6 +86,46 @@ namespace
         out.random_level     = p.random_level;
         out.random_pan       = p.random_pan;
         return out;
+    }
+
+    // Canonical slider ranges for the 5 playback params, sourced from
+    // gui/src/controls.cpp. The scaling pickup formula needs each slider's
+    // (min, max) to compute convergence at the extremes. If GUI ranges
+    // change, mirror them here.
+    constexpr float kStartMin  = 0.f, kStartMax  = 1.f;
+    constexpr float kLengthMin = 0.f, kLengthMax = 1.f;
+    constexpr float kSpeedMin  = -4.f, kSpeedMax = 4.f;
+    constexpr float kLevelMin  = 0.f, kLevelMax  = 1.f;
+    constexpr float kPanMin    = 0.f, kPanMax    = 1.f;
+
+    // Piecewise-linear scaling pickup. Maps the live slider value into an
+    // effective voice value such that the curve passes through
+    // (anchor_slider, anchor_voice) and converges to (min, min) and
+    // (max, max) at the slider's extremes. Returning the slider to its
+    // anchor restores the voice's original (post-random) value.
+    inline float scale_to_anchor(float slider_now, float anchor_slider,
+                                 float anchor_voice, float slider_min, float slider_max)
+    {
+        if (slider_now >= anchor_slider)
+        {
+            const float span = slider_max - anchor_slider;
+            if (span <= 1e-9f) return anchor_voice;
+            const float t = (slider_now - anchor_slider) / span;
+            return anchor_voice + (slider_max - anchor_voice) * t;
+        }
+        else
+        {
+            const float span = anchor_slider - slider_min;
+            if (span <= 1e-9f) return anchor_voice;
+            const float t = (anchor_slider - slider_now) / span;
+            return anchor_voice + (slider_min - anchor_voice) * t;
+        }
+    }
+
+    // Snapshot the current slider state for the 5 playback params.
+    VoiceSliderAnchor capture_anchor(const ParameterData& p)
+    {
+        return { p.start, p.length, p.speed, p.level, p.pan };
     }
 
     // Pull the live-editable subset of the global params into a slot. Used
@@ -110,6 +171,44 @@ namespace
         out.random_pan       = p.random_pan;
         return out;
     }
+
+    // Overlay only the non-playback live fields onto an existing snapshot.
+    // Used in Global mode so the 5 playback params (start/length/speed/level/
+    // pan) stay frozen at their trigger-time effective values — the scaling
+    // pickup at set_live_params time will derive the live playback values
+    // from the slider + per-voice anchor instead.
+    void overlay_non_playback_fields(VoiceLiveParams& out, const ParameterData& p)
+    {
+        out.attack  = p.attack;
+        out.decay   = p.decay;
+        out.sustain = p.sustain;
+        out.release = p.release;
+
+        out.envelope_speed  = p.envelope_speed;
+        out.envelope_start  = p.envelope_start;
+        out.envelope_length = p.envelope_length;
+        out.envelope_level  = p.envelope_level;
+        out.envelope_pan    = p.envelope_pan;
+
+        out.phase_speed  = p.phase_speed;
+        out.phase_start  = p.phase_start;
+        out.phase_length = p.phase_length;
+        out.phase_level  = p.phase_level;
+        out.phase_pan    = p.phase_pan;
+
+        out.pitch_deviation  = p.pitch_deviation;
+        out.size_deviation   = p.size_deviation;
+        out.shape_deviation  = p.shape_deviation;
+        out.grains_deviation = p.grains_deviation;
+        out.timestretch      = p.timestretch;
+        out.random_pitch     = p.random_pitch;
+        out.random_size      = p.random_size;
+        out.random_shape     = p.random_shape;
+        out.random_grains    = p.random_grains;
+        out.random_position  = p.random_position;
+        out.random_level     = p.random_level;
+        out.random_pan       = p.random_pan;
+    }
 }
 
 Instrument::Instrument(InstrumentOutputData& output)
@@ -128,10 +227,14 @@ void Instrument::prepare(double sample_rate)
 void Instrument::process(const InstrumentInputData& input, InstrumentOutputData& output)
 {
     const size_t block_size  = output.audio.channel(0).size();
-    const size_t buffer_size = input.buffer.loaded_sample.channel(0).size();
-    if (buffer_size == 0) return;
-
     const auto& p = input.parameter;
+
+    // Pick the editing layer's buffer for slider-driven logic (new triggers,
+    // marker-snap reads, etc.). May be 0 if the currently selected layer has
+    // no sample loaded — in that case, new triggers are silently dropped but
+    // existing voices on other layers keep playing.
+    const int editing_layer = idsp::clamp(p.current_layer, 0, static_cast<int>(max_layers) - 1);
+    const size_t buffer_size = input.layer_buffers[editing_layer].loaded_sample.channel(0).size();
 
     // Clear MIDI ownership + latch state for any voice that became inactive
     // since last block (natural envelope completion, stop, or voice-stealing).
@@ -153,36 +256,61 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     //     default whenever no voice is selected. ---
     if (voice_selected && voices_[selected_voice].is_active())
     {
-        // Voice mode: overlay live edits onto the selected slot; stop kills it.
+        // Voice mode: overlay live edits onto the selected slot (jump-to);
+        // re-snap the anchor so a later switch to Global mode resumes
+        // scaling from the latest Voice-mode value, not the stale trigger.
         voice_live_params_[selected_voice] = overlay_live_params(p);
+        voice_anchor_[selected_voice]      = capture_anchor(p);
         if (p.stop) voices_[selected_voice].kill();
     }
     else
     {
-        // Global mode: overlay live edits onto every active voice; stop kills all.
-        const VoiceLiveParams overlay = overlay_live_params(p);
+        // Global mode: overlay only the non-playback live fields onto each
+        // active voice ON THE CURRENT LAYER. Voices on other layers (e.g. a
+        // held / latched MIDI voice triggered while editing a different
+        // layer) keep their trigger-time values so they don't mutate when
+        // the user switches layer. The 5 playback params stay at their
+        // trigger-time effective values in voice_live_params_; scaling
+        // pickup is applied later, in the per-voice set_live_params loop.
         for (size_t i = 0; i < voices_.size(); ++i)
         {
-            if (voices_[i].is_active()) voice_live_params_[i] = overlay;
+            if (voices_[i].is_active() && voices_[i].layer() == editing_layer)
+                overlay_non_playback_fields(voice_live_params_[i], p);
         }
-        if (p.stop) voices_.kill_all();
+        // Stop scopes to the current layer's voices only — leaves voices on
+        // other layers alone. Stop All (handled below) is the cross-layer kill.
+        if (p.stop)
+        {
+            for (size_t i = 0; i < voices_.size(); ++i)
+            {
+                if (voices_[i].is_active() && voices_[i].layer() == editing_layer)
+                    voices_[i].kill();
+            }
+        }
     }
 
     // --- play: allocate a plain (no envelope) voice. Voice mode forces it
     //     into the selected slot; Global mode picks any free slot. The voice
     //     loops indefinitely until stopped. ---
-    if (p.play)
+    if (p.play && buffer_size > 0)
     {
         const int preferred = voice_selected ? selected_voice : -1;
         if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
         {
             const size_t slot = static_cast<size_t>(v - &voices_[0]);
-            voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
+            voice_live_params_[slot]      = build_effective_live_params(p, rng_state_);
+            voice_effective_params_[slot] = voice_live_params_[slot];
+            voice_anchor_[slot]           = capture_anchor(p);
             v->trigger_plain(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+            v->set_sample_loops(p.loop);
+            v->set_layer(editing_layer);
             voice_midi_seq_[slot] = 0;
         }
         // else: fail-silent (stealing off, all voices busy)
     }
+
+    // Stop All — kill every voice on every layer, regardless of mode.
+    if (p.stop_all) voices_.kill_all();
 
     // --- MIDI note events ---
     // Note-ons allocate a voice and trigger a gated ADSR; the matching
@@ -193,6 +321,7 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
         const auto& ev = p.midi_events[i];
         if (ev.note_on)
         {
+            if (buffer_size == 0) continue;  // no sample on current layer — drop
             if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, -1))
             {
                 const size_t slot = static_cast<size_t>(v - &voices_[0]);
@@ -202,9 +331,47 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
                 // (pitch / speed) and per-grain (level). Keeping MIDI offsets
                 // out of voice_live_params keeps the slider snapshot clean
                 // and avoids any multiply-compounding on snap-on-select.
-                voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
+                voice_live_params_[slot]      = build_effective_live_params(p, rng_state_);
+                voice_effective_params_[slot] = voice_live_params_[slot];
+                voice_anchor_[slot]           = capture_anchor(p);
+
+                // Position routing: the MIDI note picks a start fraction
+                // (snapped to a marker when markers are active), overriding
+                // any random-jittered start that build_effective_live_params
+                // produced. Length is re-anchored from the new start.
+                if (p.note_route_mode == 1)
+                {
+                    float start_frac = 0.f;
+                    float length_frac = idsp::clamp(p.length, 0.f, 1.f);
+                    if (p.markers_enabled && p.marker_count > 0)
+                    {
+                        const int N    = p.marker_count;
+                        const int idx  = idsp::clamp(ev.note_number - 60, 0, N - 1);
+                        start_frac     = p.marker_fractions[idx];
+                        const int span    = idsp::clamp(p.length_markers, 1, N - idx);
+                        const int end_idx = idx + span;
+                        const float end   = (end_idx < N) ? p.marker_fractions[end_idx] : 1.f;
+                        length_frac = end - start_frac;
+                    }
+                    else
+                    {
+                        start_frac  = idsp::clamp(static_cast<float>(ev.note_number) / 127.f, 0.f, 1.f);
+                        length_frac = idsp::clamp(p.length, 0.f, 1.f - start_frac);
+                    }
+                    voice_live_params_[slot].start  = start_frac;
+                    voice_live_params_[slot].length = length_frac;
+                    voice_effective_params_[slot]   = voice_live_params_[slot];
+                }
+
                 v->trigger_adsr_gated(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
-                const float octave_offset = std::log2(ev.note_ratio > 0.f ? ev.note_ratio : 1.f);
+                v->set_sample_loops(p.loop);
+                v->set_layer(editing_layer);
+                // Pitch routing applies the semitone offset; position routing
+                // suppresses it so the note number doesn't double up as both
+                // a pitch shift and a start selector.
+                const float octave_offset = (p.note_route_mode == 1)
+                    ? 0.f
+                    : std::log2(ev.note_ratio > 0.f ? ev.note_ratio : 1.f);
                 v->set_midi_offsets(octave_offset, ev.velocity);
                 voice_midi_seq_[slot] = ev.midi_seq;
             }
@@ -255,51 +422,122 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     if (p.position_scrubbing)
     {
         const float frac = idsp::clamp(p.position, 0.f, 1.f);
-        auto scrub = [&](size_t i)
-        {
-            if (voices_[i].is_active()) voices_[i].set_loop_position_fraction(frac);
-        };
         if (voice_selected && voices_[selected_voice].is_active())
         {
-            scrub(static_cast<size_t>(selected_voice));
+            // Voice mode: jump-to on the selected voice.
+            voices_[selected_voice].set_loop_position_fraction(frac);
         }
         else if (p.global_mode)
         {
-            for (size_t i = 0; i < voices_.size(); ++i) scrub(i);
+            // Global mode: value-scaling pickup, scoped to the current layer.
+            // On the rising edge of the scrub gesture, snapshot the slider
+            // value and each in-layer voice's current loop position. While
+            // the drag continues, rescale each voice's position through its
+            // anchor — returning the slider to its grab point restores
+            // every voice's relative phase. Voices on other layers are
+            // untouched.
+            if (!position_scrubbing_prev_)
+            {
+                position_slider_anchor_ = frac;
+                for (size_t i = 0; i < voices_.size(); ++i)
+                {
+                    voice_position_anchor_[i] = (voices_[i].is_active()
+                                                 && voices_[i].layer() == editing_layer)
+                        ? voices_[i].loop_position_fraction()
+                        : 0.f;
+                }
+            }
+            for (size_t i = 0; i < voices_.size(); ++i)
+            {
+                if (!voices_[i].is_active()) continue;
+                if (voices_[i].layer() != editing_layer) continue;
+                const float scaled = scale_to_anchor(frac,
+                                                     position_slider_anchor_,
+                                                     voice_position_anchor_[i],
+                                                     0.f, 1.f);
+                voices_[i].set_loop_position_fraction(idsp::clamp(scaled, 0.f, 1.f));
+            }
         }
         else
         {
+            // Auto mode: jump-to on the newest active voice on the current layer.
             int target = -1;
             uint64_t best = 0;
             for (size_t i = 0; i < voices_.size(); ++i)
             {
-                if (voices_[i].is_active() && voices_[i].launch_seq() >= best)
+                if (voices_[i].is_active() && voices_[i].layer() == editing_layer
+                    && voices_[i].launch_seq() >= best)
                 {
                     best   = voices_[i].launch_seq();
                     target = static_cast<int>(i);
                 }
             }
-            if (target >= 0) scrub(static_cast<size_t>(target));
+            if (target >= 0) voices_[static_cast<size_t>(target)].set_loop_position_fraction(frac);
         }
     }
+    position_scrubbing_prev_ = p.position_scrubbing;
 
     // --- envelope_trigger button: always spawns a new AR voice. ---
-    if (p.envelope_trigger)
+    if (p.envelope_trigger && buffer_size > 0)
     {
         const int preferred = voice_selected ? selected_voice : -1;
         if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, preferred))
         {
             const size_t slot = static_cast<size_t>(v - &voices_[0]);
-            voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
+            voice_live_params_[slot]      = build_effective_live_params(p, rng_state_);
+            voice_effective_params_[slot] = voice_live_params_[slot];
+            voice_anchor_[slot]           = capture_anchor(p);
             v->trigger_ar(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+            v->set_layer(editing_layer);
         }
     }
 
-    // --- push live edits into each active voice once per block ---
+    // --- push live edits into each active voice once per block. In Global
+    //     mode the 5 playback params are rescaled per voice through its
+    //     anchor (scaling pickup); in Voice mode voice_live_params_ already
+    //     reflects the user's jump-to edit verbatim.
+    const bool global_mode_now = !(voice_selected && voices_[selected_voice].is_active());
     for (size_t vi = 0; vi < voices_.size(); ++vi)
     {
-        if (voices_[vi].is_active())
-            voices_[vi].set_live_params(voice_live_params_[vi], buffer_size, sample_rate_);
+        if (!voices_[vi].is_active()) continue;
+
+        // Each voice's set_live_params is scaled against its own layer's
+        // buffer length (which may differ from the editing layer's).
+        const size_t voice_buffer_size =
+            input.layer_buffers[voices_[vi].layer()].loaded_sample.channel(0).size();
+        if (voice_buffer_size == 0) continue;
+
+        VoiceLiveParams effective;
+        if (!global_mode_now && static_cast<int>(vi) == selected_voice)
+        {
+            // Voice mode on the selected slot: jump-to from voice_live_params_
+            // (which the mode-mux at the top already overwrote with current
+            // slider values).
+            effective = voice_live_params_[vi];
+            voice_effective_params_[vi] = effective;
+        }
+        else if (global_mode_now && voices_[vi].layer() == editing_layer)
+        {
+            // On-layer in Global mode: scaling pickup against the trigger-time
+            // anchor for the 5 playback params, slider verbatim for the rest.
+            effective = voice_live_params_[vi];
+            const auto& anchor = voice_anchor_[vi];
+            const auto& trig   = voice_live_params_[vi];
+            effective.start  = scale_to_anchor(p.start,  anchor.start,  trig.start,  kStartMin,  kStartMax);
+            effective.length = scale_to_anchor(p.length, anchor.length, trig.length, kLengthMin, kLengthMax);
+            effective.speed  = scale_to_anchor(p.speed,  anchor.speed,  trig.speed,  kSpeedMin,  kSpeedMax);
+            effective.level  = scale_to_anchor(p.level,  anchor.level,  trig.level,  kLevelMin,  kLevelMax);
+            effective.pan    = scale_to_anchor(p.pan,    anchor.pan,    trig.pan,    kPanMin,    kPanMax);
+            voice_effective_params_[vi] = effective;
+        }
+        else
+        {
+            // Off-layer in Global mode (or any other untouched case):
+            // replay whatever was last actually pushed. Keeps held voices
+            // playing the user's last-edited values across layer switches.
+            effective = voice_effective_params_[vi];
+        }
+        voices_[vi].set_live_params(effective, voice_buffer_size, sample_rate_);
     }
 
     // --- zero output, then sum each voice voice-major (cheaper iteration). ---
@@ -309,13 +547,14 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
         output.audio.channel(1)[i] = 0.0f;
     }
 
-    const auto& left_buffer  = input.buffer.sample[0];
-    const auto& right_buffer = input.buffer.sample[1];
-
     for (size_t vi = 0; vi < voices_.size(); ++vi)
     {
         auto& v = voices_[vi];
         if (!v.is_active()) continue;
+        // Each voice reads from its own layer's playback buffer for life.
+        const auto& lbuf = input.layer_buffers[v.layer()];
+        const auto& left_buffer  = lbuf.sample[0];
+        const auto& right_buffer = lbuf.sample[1];
         for (size_t i = 0; i < block_size; ++i)
         {
             if (!v.is_active()) break;
@@ -332,7 +571,24 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
         output.state.voice_active[i]      = voices_[i].is_active();
         output.state.voice_position[i]    = voices_[i].position();
         output.state.voice_volume[i]      = voices_[i].current_level();
+        output.state.voice_layer[i]       = voices_[i].layer();
         output.state.voice_live_params[i] = voice_live_params_[i];
+    }
+
+    // Aggregate per-layer view state. Each active voice contributes its
+    // current_level to its layer's slot; the GUI uses this for layer-view
+    // button brightness and the "any voice alive on this layer" flag.
+    for (size_t li = 0; li < max_layers; ++li)
+    {
+        output.state.layer_has_active_voices[li] = false;
+        output.state.layer_summed_envelope[li]   = 0.f;
+    }
+    for (size_t i = 0; i < max_voices; ++i)
+    {
+        if (!voices_[i].is_active()) continue;
+        const int li = idsp::clamp(voices_[i].layer(), 0, static_cast<int>(max_layers) - 1);
+        output.state.layer_has_active_voices[li] = true;
+        output.state.layer_summed_envelope[li] += voices_[i].current_level();
     }
 
     // Position-slider display: pick the same routing-target voice as scrub

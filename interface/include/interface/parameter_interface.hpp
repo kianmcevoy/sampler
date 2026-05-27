@@ -34,7 +34,19 @@ class ParameterInterface
         void process(const ParameterInterfaceInputData& input, ParameterInterfaceOutputData& output);
 
     private:
-        bool load_sample_into_buffer(const juce::File& audio_file, ParameterInterfaceOutputData& output, float start_slider, float length_slider);
+        // Load `audio_file` into `target` (one layer's buffer) and publish the
+        // resulting waveform + display markers to `gui`. Used both by the
+        // constructor (loads layer 0's default sample) and by the file-chooser
+        // handshake (loads into the currently-selected layer's buffer).
+        bool load_sample_into_buffer(const juce::File& audio_file,
+                                     SampleBuffer& target, GuiOutputData& gui,
+                                     float start_slider, float length_slider);
+
+        // Republish `target`'s waveform + display markers into `gui` without
+        // re-decoding the audio. Called when the user switches layer so the
+        // display swaps to the newly-selected layer's sample.
+        void publish_waveform(const SampleBuffer& target, GuiOutputData& gui,
+                              float start_slider, float length_slider);
 
         // --- MIDI ---
         struct ActiveNote
@@ -69,6 +81,11 @@ class ParameterInterface
 
         // Latched CC1 (modwheel) value in [0, 1]. Persists across blocks.
         float modwheel_position_ { 0.f };
+
+        // The layer currently published into the GUI waveform display. When
+        // GuiInputData::selected_layer changes, the next process() re-publishes
+        // the new layer's waveform and updates this latch.
+        int last_published_layer_ { 0 };
 
         // Per-block parse buffer. 256 messages is well over a typical block.
         imidi::MessageQueueStatic<256> midi_queue_ {};

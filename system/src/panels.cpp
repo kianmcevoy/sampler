@@ -384,6 +384,21 @@ class VoiceButtonContainer:
             }
         }
 
+        // Generic background colour, used by layer view to render the current
+        // layer in gold and other-active layers in grey. set_selected uses a
+        // bool-keyed cache — this path always pushes, so layer-view ticks
+        // re-render even after a set_selected call cached the same flag.
+        void set_background_colour(juce::Colour bg)
+        {
+            selected_ = false;  // invalidate set_selected's cache
+            auto* view = dynamic_cast<igui::InstruoLedTextButtonElement*>(&this->button.view());
+            if (view != nullptr)
+            {
+                view->set_background_colour(bg);
+                view->repaint();
+            }
+        }
+
         size_t voice_index() const { return voice_index_; }
 
         igui::LedButton button;
@@ -587,11 +602,31 @@ class WaveformDisplay:
                 g.drawLine(end_x, bounds.getY(), end_x, bounds.getBottom(), 2.0f);
             }
 
-            // Draw voice cursors (gold lines with brightness based on envelope level)
+            // Draw markers (white vertical lines) when marker mode is active.
+            // Drawn before voice cursors so the cursors render on top.
+            const int marker_count = gui_output.marker_count.load();
+            if (marker_count > 0)
+            {
+                g.setColour(juce::Colours::white.withAlpha(0.6f));
+                for (int i = 0; i < marker_count; ++i)
+                {
+                    const int marker_sample = gui_output.marker_positions[i].load();
+                    if (marker_sample < 0 || marker_sample >= num_samples) continue;
+                    const float marker_x = bounds.getX()
+                        + (static_cast<float>(marker_sample) / num_samples) * width;
+                    g.drawLine(marker_x, bounds.getY(), marker_x, bounds.getBottom(), 1.0f);
+                }
+            }
+
+            // Draw voice cursors (gold lines with brightness based on envelope
+            // level), but only for voices that belong to the currently
+            // displayed layer — voices on other layers play other buffers, so
+            // their position has no meaning on this waveform.
+            const int selected_layer = this->audio_processor.get_gui_input_data().selected_layer.load();
             for (size_t i = 0; i < max_voices; ++i)
             {
                 const bool is_active = gui_output.voice_active[i].load();
-                if (is_active)
+                if (is_active && gui_output.voice_layer[i].load() == selected_layer)
                 {
                     const float voice_pos = gui_output.voice_position[i].load();
                     const float voice_vol = gui_output.voice_volume[i].load();
@@ -637,15 +672,34 @@ class WaveformDisplay:
                 }
             }
 
+            // Track marker grid changes so resolution / type switches repaint
+            // even when no voice is playing and the gold range hasn't moved.
+            // First+last positions form a cheap fingerprint that detects
+            // time↔transient swaps at equal counts (positions differ) and
+            // resolution changes within a mode (positions or count differ).
+            const int current_marker_count = gui_output.marker_count.load();
+            const int marker_fp_first = (current_marker_count > 0)
+                ? gui_output.marker_positions[0].load() : -1;
+            const int marker_fp_last  = (current_marker_count > 0)
+                ? gui_output.marker_positions[current_marker_count - 1].load() : -1;
+            const bool markers_changed =
+                current_marker_count != this->last_marker_count
+             || marker_fp_first      != this->last_marker_first
+             || marker_fp_last       != this->last_marker_last;
+
             // Repaint while any voice is alive (so cursors animate) AND on the
             // active→inactive edge (so the final cursor disappears), plus on
-            // start/end changes.
+            // start/end changes or marker grid changes.
             const bool voices_changed = any_voice_active || this->last_any_voice_active;
-            if (current_start != this->last_start || current_end != this->last_end || voices_changed)
+            if (current_start != this->last_start || current_end != this->last_end
+                || voices_changed || markers_changed)
             {
                 this->last_start = current_start;
                 this->last_end = current_end;
                 this->last_any_voice_active = any_voice_active;
+                this->last_marker_count = current_marker_count;
+                this->last_marker_first = marker_fp_first;
+                this->last_marker_last  = marker_fp_last;
                 this->repaint();
             }
         }
@@ -655,6 +709,9 @@ class WaveformDisplay:
         int last_start = -1;
         int last_end = -1;
         bool last_any_voice_active = false;
+        int last_marker_count = -1;
+        int last_marker_first = -1;
+        int last_marker_last  = -1;
 };
 
 
@@ -738,6 +795,11 @@ namespace
                                     || id == "random_level" || id == "random_pan")
                                 {
                                     return juce::String(value * 100.f, 0) + "%";
+                                }
+                                if (id == "resolution")
+                                {
+                                    // Integer marker count — round to whole number.
+                                    return juce::String(static_cast<int>(std::round(value)));
                                 }
                                 // speed (-4..4) and anything else: show the raw value.
                                 return juce::String(value, 2);
@@ -869,6 +931,11 @@ void MainPanel::set_voice_brightness(size_t button_idx, float brightness)
 void MainPanel::set_voice_selected(size_t button_idx, bool selected)
 {
     this->voice_button_containers[button_idx]->set_selected(selected);
+}
+
+void MainPanel::set_voice_background_colour(size_t button_idx, juce::Colour colour)
+{
+    this->voice_button_containers[button_idx]->set_background_colour(colour);
 }
 
 void MainPanel::set_slider_alpha(const juce::String& id, float alpha)

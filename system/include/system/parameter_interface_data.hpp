@@ -8,8 +8,11 @@
 #include "system/osc_control_data.hpp"
 #include "interface/gui_data.hpp"
 #include "instrument/audio_data.hpp"
+#include "instrument/constants.hpp"
 
 #include "JuceHeader.h"
+
+#include <array>
 
 /** Data structure given to ParameterInterface::load as input. */
 struct ParameterInterfaceLoadData
@@ -34,7 +37,10 @@ struct ParameterInterfaceOutputData
     ParameterData& parameter;
     UtilityData& utility;
 	GuiOutputData& gui;
-	SampleBuffer& buffer;
+	// One sample buffer per layer. ParameterInterface loads new audio into
+	// layer_buffers[selected_layer] and publishes the selected layer's
+	// waveform / markers to the GUI.
+	std::array<SampleBuffer, max_layers>& layer_buffers;
 };
 
 #endif

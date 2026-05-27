@@ -144,4 +144,32 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     //a "deselect voice / return to Global" button)
     controls.add_button("main", "global", "Global", 1460.f, 215.f);
 
+    //"Stop All" kills every voice on every layer, regardless of mode/view.
+    //Stop (above) is per-layer; this is the escape hatch.
+    controls.add_trigger("main", "stop_all", "Stop All", 1340.f, 215.f);
+
+    //View radio: voice view (default) shows per-voice activity; layer view
+    //repurposes the voice buttons as layer selectors with per-layer LEDs.
+    //Kept mutually exclusive by MainComponent.
+    controls.add_button("main", "voice_view", "Voice View", true,  1340.f, 575.f);
+    controls.add_button("main", "layer_view", "Layer View", false, 1460.f, 575.f);
+
+    //markers — snap start/length to discrete marker positions. Type chooses
+    //grid vs onset-detected transients; resolution picks how many markers (1..64).
+    controls.add_button  ("main", "markers",     "Markers",     620.f, 215.f);
+    controls.add_dropdown("main", "marker_type", "Marker Type",
+                          juce::StringArray { "Time", "Transient" }, 740.f, 215.f);
+    controls.add_slider  ("main", "resolution",  "Resolution",
+                          1.f, 64.f, 8.f, 860.f, 215.f);
+
+    //note routing — incoming MIDI note value drives pitch (default, octave
+    //shift) or position (snap to marker / linear sample-fraction).
+    controls.add_dropdown("main", "note_route", "Note Route",
+                          juce::StringArray { "Pitch", "Position" }, 980.f, 215.f);
+
+    //loop toggle (default on = current behaviour). When off, voices play once
+    //through their start..end region and self-terminate at the end, regardless
+    //of envelope stage.
+    controls.add_button  ("main", "loop", "Loop", true, 1100.f, 215.f);
+
 }

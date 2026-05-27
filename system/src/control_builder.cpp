@@ -48,11 +48,18 @@ void GuiControlBuilder::add_slider(const juce::String& panel, const juce::String
 void GuiControlBuilder::add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                    float x, float y, float w, float h)
 {
+    this->add_button(panel, identifier, label, false, x, y, w, h);
+}
+
+void GuiControlBuilder::add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
+                                   bool default_value,
+                                   float x, float y, float w, float h)
+{
     this->check_id(identifier);
 
     this->parameters.add(std::make_unique<juce::AudioParameterBool>(
         identifier, label,
-        false,
+        default_value,
         juce::AudioParameterBoolAttributes{}
     ));
 

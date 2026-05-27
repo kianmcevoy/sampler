@@ -52,6 +52,11 @@ public:
      *  Re-clicking the currently selected voice returns to Global. */
     void on_voice_button_clicked(size_t voice_index);
 
+    /** Force-deselect any currently selected voice (returns to Global).
+     *  Used by MainComponent when switching into Layer view, where the
+     *  voice buttons mean layers, not voices. */
+    void deselect_voice();
+
     Mode mode() const;
     int  selected_voice() const { return selected_voice_; }
     bool global_on()      const { return global_on_; }

@@ -49,6 +49,11 @@ class GuiControlBuilder
         void add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                         float x, float y, float w = 120.f, float h = 120.f);
 
+        /** Add a latching toggle with an explicit default state. */
+        void add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
+                        bool default_value,
+                        float x, float y, float w = 120.f, float h = 120.f);
+
         /** Add a voice-select button. Visually a LED button like add_button,
          *  but its LED is driven by per-voice active-state (audio→GUI) and
          *  its click toggles radio-style voice selection (writes selected

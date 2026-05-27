@@ -49,6 +49,11 @@ void ModeController::on_voice_button_clicked(size_t voice_index)
     else                              enter_voice_mode(voice_index);
 }
 
+void ModeController::deselect_voice()
+{
+    if (selected_voice_ >= 0) enter_global_mode();
+}
+
 void ModeController::enter_voice_mode(size_t voice_index)
 {
     const int new_selection = static_cast<int>(voice_index);

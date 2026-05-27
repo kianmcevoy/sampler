@@ -118,6 +118,9 @@ class MainPanel final:
         /// @brief Toggle the "selected" visual cue on voice button
         /// `button_idx`. Independent of activity state.
         void set_voice_selected(size_t button_idx, bool selected);
+        /// @brief Generic background colour for voice button `button_idx`.
+        /// Used by layer view to render current vs other-active layers.
+        void set_voice_background_colour(size_t button_idx, juce::Colour colour);
         /// @brief Set the JUCE alpha on the slider whose param id matches
         /// `id` (1.0 = normal, 0.4 = greyed). No-op if not found.
         void set_slider_alpha(const juce::String& id, float alpha);
