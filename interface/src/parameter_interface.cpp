@@ -10,94 +10,97 @@
 
 ParameterInterface::ParameterInterface(ParameterInterfaceOutputData& output)
 {
-	// Pre-load the bundled default sample into layer 0 so the sampler is
-	// usable without going through the file chooser first. selected_layer
-	// defaults to 0, so this is also the layer the GUI displays at launch.
-	const auto default_sample = AssetManager::get_resource_file("gui/assets/voice.wav");
-	if (load_sample_into_buffer(default_sample, output.layer_buffers[0], output.gui, 0.0f, 1.0f))
-	{
-		// Trigger a GUI repaint of the waveform once the panels come up.
-		output.gui.file_loaded.store(true);
-	}
+    // Pre-load the bundled default sample into layer 0 so the sampler is
+    // usable without going through the file chooser first. selected_layer
+    // defaults to 0, so this is also the layer the GUI displays at launch.
+    const auto default_sample = AssetManager::get_resource_file("gui/assets/voice.wav");
+    if (load_sample_into_buffer(default_sample, output.layer_buffers[0], output.gui, 0.f, 1.f))
+    {
+        // Trigger a GUI repaint of the waveform once the panels come up.
+        output.gui.file_loaded.store(true);
+    }
 }
 
-void ParameterInterface::load(const ParameterInterfaceLoadData& loaded, ParameterInterfaceOutputData& output)
+void ParameterInterface::load(const ParameterInterfaceLoadData& /*loaded*/,
+                              ParameterInterfaceOutputData& /*output*/)
 {
-
 }
 
-void ParameterInterface::process(const ParameterInterfaceInputData& input, ParameterInterfaceOutputData& output)
+void ParameterInterface::process(const ParameterInterfaceInputData& input,
+                                 ParameterInterfaceOutputData& output)
 {
-	// Parse MIDI first so velocity/pitch reads use the current slider values
-	// captured *before* any modwheel-driven start offset is applied below.
-	this->process_midi(input.midi, input.controls, output.parameter);
+    auto& p = output.parameter;
 
-	// Sliders return values already in their displayed ranges (configured in
-	// gui/src/controls.cpp), so no rescaling is needed here.
-	output.parameter.play        = input.controls.triggers.at("play");
-	output.parameter.stop        = input.controls.triggers.at("stop");
-	output.parameter.stop_all    = input.controls.triggers.at("stop_all");
-	output.parameter.latch       = input.controls.triggers.at("latch");
-	output.parameter.timestretch = input.controls.buttons.at("timestretch");
-	output.parameter.loop        = input.controls.buttons.at("loop");
-	output.parameter.position    = input.controls.sliders.at("position");
-	// Modwheel sums with the start slider, clamped to [0, 1].
-	output.parameter.start  = idsp::clamp(input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
-	output.parameter.length = input.controls.sliders.at("length");
-	output.parameter.speed  = input.controls.sliders.at("speed");
-	output.parameter.level  = input.controls.sliders.at("level");
-	output.parameter.pan    = input.controls.sliders.at("pan");
+    // Parse MIDI first so velocity/pitch reads use the current slider values
+    // captured *before* any modwheel-driven start offset is applied below.
+    this->process_midi(input.midi, input.controls, p);
 
-	output.parameter.attack  = input.controls.sliders.at("attack");
-	output.parameter.decay   = input.controls.sliders.at("decay");
-	output.parameter.sustain = input.controls.sliders.at("sustain");
-	output.parameter.release = input.controls.sliders.at("release");
+    // Sliders return values already in their displayed ranges (configured in
+    // gui/src/controls.cpp), so no rescaling is needed here.
+    p.play             = input.controls.triggers.at("play");
+    p.stop             = input.controls.triggers.at("stop");
+    p.stop_all         = input.controls.triggers.at("stop_all");
+    p.latch            = input.controls.triggers.at("latch");
+    p.timestretch      = input.controls.buttons.at("timestretch");
+    p.loop             = input.controls.buttons.at("loop");
+    p.position         = input.controls.sliders.at("position");
+    // Modwheel sums with the start slider, clamped to [0, 1].
+    p.start  = idsp::clamp(input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
+    p.length = input.controls.sliders.at("length");
+    p.speed  = input.controls.sliders.at("speed");
+    p.level  = input.controls.sliders.at("level");
+    p.pan    = input.controls.sliders.at("pan");
 
-	output.parameter.voice_stealing = input.controls.buttons.at("voice_stealing");
-	output.parameter.envelope_trigger = input.controls.triggers.at("envelope_trigger");
+    p.attack  = input.controls.sliders.at("attack");
+    p.decay   = input.controls.sliders.at("decay");
+    p.sustain = input.controls.sliders.at("sustain");
+    p.release = input.controls.sliders.at("release");
 
-	output.parameter.random_speed = input.controls.sliders.at("random_speed");
-	output.parameter.random_start = input.controls.sliders.at("random_start");
-	output.parameter.random_length = input.controls.sliders.at("random_length");
-	output.parameter.random_level = input.controls.sliders.at("random_level");
-	output.parameter.random_pan = input.controls.sliders.at("random_pan");
+    p.voice_stealing   = input.controls.buttons.at("voice_stealing");
+    p.envelope_trigger = input.controls.triggers.at("envelope_trigger");
 
-    output.parameter.envelope_speed = input.controls.sliders.at("envelope_speed");
-    output.parameter.envelope_start = input.controls.sliders.at("envelope_start");
-    output.parameter.envelope_length = input.controls.sliders.at("envelope_length");
-    output.parameter.envelope_level = input.controls.sliders.at("envelope_level");
-    output.parameter.envelope_pan = input.controls.sliders.at("envelope_pan");
+    p.random_speed  = input.controls.sliders.at("random_speed");
+    p.random_start  = input.controls.sliders.at("random_start");
+    p.random_length = input.controls.sliders.at("random_length");
+    p.random_level  = input.controls.sliders.at("random_level");
+    p.random_pan    = input.controls.sliders.at("random_pan");
 
-    output.parameter.phase_speed  = input.controls.sliders.at("phase_speed");
-    output.parameter.phase_start  = input.controls.sliders.at("phase_start");
-    output.parameter.phase_length = input.controls.sliders.at("phase_length");
-    output.parameter.phase_level  = input.controls.sliders.at("phase_level");
-    output.parameter.phase_pan    = input.controls.sliders.at("phase_pan");
+    p.envelope_speed  = input.controls.sliders.at("envelope_speed");
+    p.envelope_start  = input.controls.sliders.at("envelope_start");
+    p.envelope_length = input.controls.sliders.at("envelope_length");
+    p.envelope_level  = input.controls.sliders.at("envelope_level");
+    p.envelope_pan    = input.controls.sliders.at("envelope_pan");
 
-    output.parameter.pitch_deviation  = input.controls.sliders.at("pitch");
-    output.parameter.size_deviation   = input.controls.sliders.at("size");
-    output.parameter.shape_deviation  = input.controls.sliders.at("shape");
-    output.parameter.grains_deviation = input.controls.sliders.at("grains");
+    p.phase_speed  = input.controls.sliders.at("phase_speed");
+    p.phase_start  = input.controls.sliders.at("phase_start");
+    p.phase_length = input.controls.sliders.at("phase_length");
+    p.phase_level  = input.controls.sliders.at("phase_level");
+    p.phase_pan    = input.controls.sliders.at("phase_pan");
 
-    output.parameter.random_pitch    = input.controls.sliders.at("random_pitch");
-    output.parameter.random_size     = input.controls.sliders.at("random_size");
-    output.parameter.random_shape    = input.controls.sliders.at("random_shape");
-    output.parameter.random_grains   = input.controls.sliders.at("random_grains");
-    output.parameter.random_position = input.controls.sliders.at("random_position");
+    p.pitch_deviation  = input.controls.sliders.at("pitch");
+    p.size_deviation   = input.controls.sliders.at("size");
+    p.shape_deviation  = input.controls.sliders.at("shape");
+    p.grains_deviation = input.controls.sliders.at("grains");
+
+    p.random_pitch    = input.controls.sliders.at("random_pitch");
+    p.random_size     = input.controls.sliders.at("random_size");
+    p.random_shape    = input.controls.sliders.at("random_shape");
+    p.random_grains   = input.controls.sliders.at("random_grains");
+    p.random_position = input.controls.sliders.at("random_position");
 
     // Selected voice (GUI-thread state). The Instrument uses this both to
     // route live edits onto a specific voice and to force a `play` into that
     // slot. -1 means "no selection" — fall back to the normal allocator.
-    output.parameter.selected_voice     = input.gui.selected_voice.load();
-    output.parameter.global_mode        = input.gui.global_mode.load();
-    output.parameter.position_scrubbing = input.gui.position_scrubbing.load();
+    p.selected_voice     = input.gui.selected_voice.load();
+    p.global_mode        = input.gui.global_mode.load();
+    p.position_scrubbing = input.gui.position_scrubbing.load();
 
     // Layer routing. selected_layer chooses which buffer marker/snap reads
     // see, where new triggers land, and which waveform the GUI displays.
     {
         const int sel = idsp::clamp(input.gui.selected_layer.load(),
                                     0, static_cast<int>(max_layers) - 1);
-        output.parameter.current_layer = sel;
+        p.current_layer = sel;
         // Republish waveform on layer-switch so the display swaps even if no
         // new sample was loaded into the newly-selected layer.
         if (sel != last_published_layer_)
@@ -110,17 +113,17 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
     }
 
     // --- markers: read controls, optionally snap start/length, publish to GUI.
-    const bool markers_on = input.controls.buttons.at("markers");
-    const size_t mtype    = input.controls.dropdowns.at("marker_type");
-    const int resolution  = static_cast<int>(input.controls.sliders.at("resolution"));
-    output.parameter.markers_enabled = markers_on;
-    output.parameter.marker_type     = static_cast<int>(mtype);
-    output.parameter.resolution      = resolution;
+    const bool   markers_on = input.controls.buttons.at("markers");
+    const size_t mtype      = input.controls.dropdowns.at("marker_type");
+    const int    resolution = static_cast<int>(input.controls.sliders.at("resolution"));
+    p.markers_enabled = markers_on;
+    p.marker_type     = static_cast<int>(mtype);
+    p.resolution      = resolution;
 
-    output.parameter.note_route_mode = static_cast<int>(input.controls.dropdowns.at("note_route"));
+    p.note_route_mode = static_cast<int>(input.controls.dropdowns.at("note_route"));
 
     // Marker / waveform reads always target the currently-selected layer.
-    const SampleBuffer& active_buffer = output.layer_buffers[output.parameter.current_layer];
+    const SampleBuffer& active_buffer = output.layer_buffers[p.current_layer];
     const int buffer_size = static_cast<int>(active_buffer.loaded_sample.channel(0).size());
 
     if (markers_on && buffer_size > 0)
@@ -132,7 +135,10 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
         {
             N = idsp::clamp(resolution, 1, 64);
             for (int i = 0; i < N; ++i)
-                markers[i] = static_cast<int>(static_cast<float>(i) / static_cast<float>(N) * static_cast<float>(buffer_size));
+            {
+                markers[i] = static_cast<int>(
+                    static_cast<float>(i) / static_cast<float>(N) * static_cast<float>(buffer_size));
+            }
         }
         else
         {
@@ -148,7 +154,8 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
                 input.controls.sliders.at("start") + this->modwheel_position_, 0.f, 1.f);
             const int start_marker = idsp::clamp(
                 static_cast<int>(start_slider * static_cast<float>(N)), 0, N - 1);
-            const float start_frac = static_cast<float>(markers[start_marker]) / static_cast<float>(buffer_size);
+            const float start_frac =
+                static_cast<float>(markers[start_marker]) / static_cast<float>(buffer_size);
 
             // Snap length: slider [0,1] maps to [1, N - start_marker] markers.
             // End fraction is the next marker after the span, or end-of-buffer
@@ -161,24 +168,25 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
                 ? static_cast<float>(markers[end_marker_idx]) / static_cast<float>(buffer_size)
                 : 1.f;
 
-            output.parameter.start  = start_frac;
-            output.parameter.length = end_frac - start_frac;
+            p.start  = start_frac;
+            p.length = end_frac - start_frac;
 
             // Publish marker context so the instrument's per-launch random
             // jitter can quantise onto marker positions instead of producing
             // continuous values that drift off the marker grid.
-            output.parameter.marker_count   = N;
-            output.parameter.start_marker   = start_marker;
-            output.parameter.length_markers = length_markers;
+            p.marker_count   = N;
+            p.start_marker   = start_marker;
+            p.length_markers = length_markers;
             for (int i = 0; i < N;  ++i)
-                output.parameter.marker_fractions[i] =
+            {
+                p.marker_fractions[i] =
                     static_cast<float>(markers[i]) / static_cast<float>(buffer_size);
-            for (int i = N; i < 64; ++i)
-                output.parameter.marker_fractions[i] = 0.f;
+            }
+            for (int i = N; i < 64; ++i) p.marker_fractions[i] = 0.f;
         }
         else
         {
-            output.parameter.marker_count = 0;
+            p.marker_count = 0;
         }
 
         for (int i = 0; i < N;  ++i) output.gui.marker_positions[i].store(markers[i]);
@@ -187,60 +195,56 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input, Param
     }
     else
     {
-        output.parameter.marker_count = 0;
+        p.marker_count = 0;
         output.gui.marker_count.store(0);
     }
 
-	if (output.gui.waveform_ready.load() && !output.gui.waveform_left.empty())
-	{
-		const int num_samples = static_cast<int>(output.gui.waveform_left.size());
-		if (num_samples > 0)
-		{
-			// Use the (post-modwheel, post-snap) parameter values so the gold
-			// range markers track what's actually playing.
-			const int start_point = static_cast<int>(output.parameter.start * num_samples);
-			const int duration = idsp::max(static_cast<int>(output.parameter.length * num_samples), 1);
-			output.gui.display_marker_start = idsp::clamp(start_point, 0, num_samples - 1);
-			output.gui.display_marker_end   = idsp::min(start_point + duration, num_samples);
-		}
-	}
-	else
-	{
-		output.gui.display_marker_start.store(0);
-		output.gui.display_marker_end.store(0);
-	}
+    // Update the display markers on the waveform view from the (post-modwheel,
+    // post-snap) parameter values, so the gold range markers track what's
+    // actually playing.
+    if (output.gui.waveform_ready.load() && !output.gui.waveform_left.empty())
+    {
+        const int num_samples = static_cast<int>(output.gui.waveform_left.size());
+        if (num_samples > 0)
+        {
+            const int start_point = static_cast<int>(p.start * num_samples);
+            const int duration    = idsp::max(static_cast<int>(p.length * num_samples), 1);
+            output.gui.display_marker_start = idsp::clamp(start_point, 0, num_samples - 1);
+            output.gui.display_marker_end   = idsp::min(start_point + duration, num_samples);
+        }
+    }
+    else
+    {
+        output.gui.display_marker_start.store(0);
+        output.gui.display_marker_end.store(0);
+    }
 
+    // File chooser handshake.
+    if (input.controls.triggers.at("load_sample"))
+    {
+        output.gui.request_file_chooser.store(true);
+    }
 
-	// When load_sample trigger is pressed, request file chooser from GUI
-	if (input.controls.triggers.at("load_sample"))
-	{
-		output.gui.request_file_chooser.store(true);
-	}
+    if (input.gui.file_path_ready.load())
+    {
+        const auto& file_path = input.gui.sample_file_path;
+        if (!file_path.empty())
+        {
+            // Load into the currently-selected layer's buffer. Layers other
+            // than the selected one are untouched, so existing voices on those
+            // layers keep playing their original sample.
+            this->load_sample_into_buffer(juce::File(file_path),
+                                          output.layer_buffers[p.current_layer],
+                                          output.gui,
+                                          input.controls.sliders.at("start"),
+                                          input.controls.sliders.at("length"));
+        }
 
-	// Check if a file has been selected and is ready to load
-	if (input.gui.file_path_ready.load())
-	{
-		const auto& file_path = input.gui.sample_file_path;
-		if (!file_path.empty())
-		{
-			// Load into the currently-selected layer's buffer. Layers other
-			// than the selected one are untouched, so existing voices on those
-			// layers keep playing their original sample.
-			this->load_sample_into_buffer(juce::File(file_path),
-			                        output.layer_buffers[output.parameter.current_layer],
-			                        output.gui,
-			                        input.controls.sliders.at("start"),
-			                        input.controls.sliders.at("length"));
-		}
-
-		// Always acknowledge the handshake — GUI clears file_path_ready on this.
-		output.gui.file_loaded.store(true);
-	}
+        // Always acknowledge the handshake — GUI clears file_path_ready on this.
+        output.gui.file_loaded.store(true);
+    }
 }
 
-// Load `audio_file` into `target` (one layer's buffer) and publish its
-// waveform + display markers to `gui`. The caller picks the layer; callers
-// today always load the currently-selected layer so the display matches.
 bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file,
                                                  SampleBuffer& target, GuiOutputData& gui,
                                                  float start_slider, float length_slider)
@@ -303,7 +307,7 @@ bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file,
         for (int i = 0; i < num_samples; ++i)
         {
             mono[static_cast<size_t>(i)] = 0.5f * (target.loaded_sample.channel(0)[i]
-                                                  + target.loaded_sample.channel(1)[i]);
+                                                 + target.loaded_sample.channel(1)[i]);
         }
         const auto onsets = idsp::detect_onsets(
             mono.data(), static_cast<size_t>(num_samples),
@@ -380,7 +384,7 @@ void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
             }
 
             const int slot = this->allocate_midi_voice_slot(voice_stealing);
-            if (slot < 0) continue;   // all slots busy, stealing off — drop
+            if (slot < 0) continue;  // all slots busy, stealing off — drop
 
             const uint64_t seq = ++this->midi_seq_counter_;
             this->active_notes_[slot] = ActiveNote { /*active=*/true, /*note=*/d.note, /*midi_seq=*/seq };
@@ -422,9 +426,8 @@ void ParameterInterface::process_midi(const juce::MidiBuffer& midi,
 
 void ParameterInterface::emit_note_off(uint8_t note, ParameterData& out)
 {
-    for (size_t s = 0; s < this->active_notes_.size(); ++s)
+    for (auto& slot : this->active_notes_)
     {
-        auto& slot = this->active_notes_[s];
         if (slot.active && slot.note == note)
         {
             if (out.midi_event_count < ParameterData::max_midi_events_per_block)
@@ -437,8 +440,8 @@ void ParameterInterface::emit_note_off(uint8_t note, ParameterData& out)
                     /*note_number=*/0,
                 };
             }
-            slot = ActiveNote{};   // clear
-            return;                // one note-off → one voice release
+            slot = ActiveNote{};  // clear
+            return;               // one note-off → one voice release
         }
     }
 }

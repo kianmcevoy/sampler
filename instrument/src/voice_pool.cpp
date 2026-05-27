@@ -7,21 +7,6 @@ void VoicePool::kill_all()
     for (auto& v : voices_) v.kill();
 }
 
-void VoicePool::kill_oldest()
-{
-    Voice* oldest = nullptr;
-    uint64_t lo = std::numeric_limits<uint64_t>::max();
-    for (auto& v : voices_)
-    {
-        if (v.is_active() && v.launch_seq() < lo)
-        {
-            lo = v.launch_seq();
-            oldest = &v;
-        }
-    }
-    if (oldest) oldest->kill();
-}
-
 Voice* VoiceAllocator::acquire(VoicePool& pool, bool voice_stealing, int preferred_slot)
 {
     // GUI voice-select override: caller asked for a specific slot. Honour it
@@ -43,7 +28,7 @@ Voice* VoiceAllocator::acquire(VoicePool& pool, bool voice_stealing, int preferr
     {
         if (v.launch_seq() < lo)
         {
-            lo = v.launch_seq();
+            lo     = v.launch_seq();
             victim = &v;
         }
     }

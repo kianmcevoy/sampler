@@ -28,9 +28,6 @@ public:
     /** Kill every active voice. */
     void kill_all();
 
-    /** Kill the oldest active voice (smallest launch_seq). No-op if none active. */
-    void kill_oldest();
-
 private:
     Container voices_{};
 };

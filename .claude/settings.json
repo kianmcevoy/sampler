@@ -26,7 +26,10 @@
       "Bash(git log *)",
       "Bash(git rm *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(awk 'NR==1,NR==5' /home/kian/instruo/sampler/interface/src/parameter_interface.cpp)",
+      "Bash(awk 'NR==35,NR==55' /home/kian/instruo/sampler/interface/src/parameter_interface.cpp)",
+      "Bash(cmake ..)"
     ],
     "additionalDirectories": [
       "/home/kian/instruo/sampler/.git/modules/system/modules/JUCE",

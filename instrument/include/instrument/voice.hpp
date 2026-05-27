@@ -22,9 +22,7 @@
  *   - trigger_ar           : Attack → Release (envelope_trigger button). Voice
  *                            terminates when envelope returns to idle.
  *   - trigger_adsr_gated   : Attack → Decay → Sustain (held) → Release on
- *                            release(). MIDI note-on. If !loop, release fires
- *                            automatically `release_len_` samples before
- *                            end-of-sample so the ramp completes.
+ *                            release() (MIDI note-on / note-off pair).
  *
  * Parameter model:
  *   - Envelope/phase speed modulation cannot flip direction (clamped at 0
@@ -95,7 +93,7 @@ public:
                         const idsp::LagrangeDelay<524288>& right);
 
 private:
-    // A single windowed grain. In loop_crossfade_mode_ (width slider ≤ -0.95)
+    // A single windowed grain. In loop_crossfade_mode_ (timestretch=false)
     // slot 0 holds the Body and slot 1 is a transient FadeIn at the loop
     // boundary. Otherwise the C-OLA cluster fills slots 0..(overlap-1) with
     // continuously spawned grains, each carrying its own per-grain pitch and

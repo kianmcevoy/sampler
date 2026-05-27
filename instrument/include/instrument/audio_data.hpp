@@ -7,18 +7,26 @@
 #include <array>
 
 
+/** Per-layer sample storage.
+ *
+ * `loaded_sample` is the canonical waveform — dynamically sized, used by the
+ * GUI for display and by onset detection. `sample[]` are the playback buffers
+ * (stereo LagrangeDelay pair) the Voice reads from via `read_at(fractional)`.
+ * Loading writes both in lockstep; they must stay in sync.
+ *
+ * `transient_indices` / `transient_count` cache the onset-detection result so
+ * marker mode can snap to detected transients without re-running detection
+ * every block. `loaded_sample_rate` is the source file's sample rate (used by
+ * the onset detector at load time, not by playback).
+ */
 struct SampleBuffer
 {
-	PolyDspBuffer loaded_sample;
-	std::array<idsp::LagrangeDelay<524288>, 2> sample;
+    PolyDspBuffer loaded_sample;
+    std::array<idsp::LagrangeDelay<524288>, 2> sample;
 
-	// Onset-detected transient sample indices, populated at load time by
-	// ParameterInterface and consumed in marker mode. Sorted ascending by
-	// time, top-64 by detected strength. transient_count == 0 means no
-	// onsets were found (or no sample is loaded).
-	std::array<int, 64> transient_indices{};
-	int                 transient_count{0};
-	float               loaded_sample_rate{48000.f};
+    std::array<int, 64> transient_indices {};
+    int                 transient_count { 0 };
+    float               loaded_sample_rate { 48000.f };
 };
 
 #endif

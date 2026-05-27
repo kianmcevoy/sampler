@@ -211,11 +211,11 @@ namespace
     }
 }
 
-Instrument::Instrument(InstrumentOutputData& output)
+Instrument::Instrument(InstrumentOutputData& /*output*/)
 {
 }
 
-void Instrument::load(const InstrumentLoadData& loaded, InstrumentOutputData& output)
+void Instrument::load(const InstrumentLoadData& /*loaded*/, InstrumentOutputData& /*output*/)
 {
 }
 
