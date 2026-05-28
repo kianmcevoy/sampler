@@ -434,8 +434,9 @@ float Voice::wrap_position(float pos, float start_f, float end_f) const
     if (duration_f <= 0.f) return pos;
     if (sample_loops_)
     {
-        while (pos >= end_f)  pos -= duration_f;
-        while (pos < start_f) pos += duration_f;
+        pos -= start_f;
+        pos -= duration_f * std::floor(pos / duration_f);
+        pos += start_f;
     }
     return pos;
 }
@@ -444,20 +445,14 @@ void Voice::wrap_grain_read(Grain& g, float start_f, float end_f) const
 {
     const float duration_f = end_f - start_f;
     if (duration_f <= 0.f) return;
-    if (g.read_pos >= end_f)
+    if (g.read_pos >= end_f || g.read_pos < start_f)
     {
         if (sample_loops_)
         {
-            while (g.read_pos >= end_f) g.read_pos -= duration_f;
-            if (g.read_pos < start_f) g.read_pos = start_f;
-        }
-        else { g.active = false; }
-    }
-    else if (g.read_pos < start_f)
-    {
-        if (sample_loops_)
-        {
-            while (g.read_pos < start_f) g.read_pos += duration_f;
+            g.read_pos -= start_f;
+            g.read_pos -= duration_f * std::floor(g.read_pos / duration_f);
+            g.read_pos += start_f;
+            // Guard against fp rounding landing exactly on end_f.
             if (g.read_pos >= end_f) g.read_pos = end_f - 1.f;
         }
         else { g.active = false; }
@@ -550,20 +545,14 @@ bool Voice::check_bounds(float effective_end)
     const float duration_f = effective_end - start_f;
     if (duration_f <= 0.f) { active_ = false; return false; }
 
-    if (position_ >= effective_end)
+    if (position_ >= effective_end || position_ < start_f)
     {
         if (sample_loops_)
         {
-            while (position_ >= effective_end) position_ -= duration_f;
-            if (position_ < start_f) position_ = start_f;
-        }
-        else { active_ = false; return false; }
-    }
-    else if (position_ < start_f)
-    {
-        if (sample_loops_)
-        {
-            while (position_ < start_f) position_ += duration_f;
+            position_ -= start_f;
+            position_ -= duration_f * std::floor(position_ / duration_f);
+            position_ += start_f;
+            // Guard against fp rounding landing exactly on effective_end.
             if (position_ >= effective_end) position_ = effective_end - 1.f;
         }
         else { active_ = false; return false; }
