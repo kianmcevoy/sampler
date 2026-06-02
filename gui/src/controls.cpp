@@ -118,6 +118,7 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     controls.add_slider("modulation", "random_shape",    "Random Shape",    0.f, 1.f, 0.f,  860.f, 455.f);
     controls.add_slider("modulation", "random_grains",   "Random Grains",   0.f, 1.f, 0.f,  980.f, 455.f);
     controls.add_slider("modulation", "random_position", "Random Position", 0.f, 1.f, 0.f, 1100.f, 455.f);
+    controls.add_slider("modulation", "random_cutoff",   "Random Cutoff",   0.f, 1.f, 0.f, 1220.f, 455.f);
 
 	//envelope controls (ADSR)
 	controls.add_button ("main", "voice_stealing",    "Voice Stealing",    1220.f,  215.f);

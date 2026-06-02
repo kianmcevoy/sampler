@@ -68,6 +68,7 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input,
     p.random_length = input.controls.sliders.at("random_length");
     p.random_level  = input.controls.sliders.at("random_level");
     p.random_pan    = input.controls.sliders.at("random_pan");
+    p.random_cutoff = input.controls.sliders.at("random_cutoff");
 
     p.envelope_speed  = input.controls.sliders.at("envelope_speed");
     p.envelope_start  = input.controls.sliders.at("envelope_start");

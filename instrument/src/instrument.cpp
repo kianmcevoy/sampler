@@ -61,7 +61,11 @@ namespace
         out.sustain = p.sustain;
         out.release = p.release;
 
-        out.filter_freq = p.filter_freq;
+        // Cutoff jitter is log-scale (multiplicative in octaves) so it sounds
+        // uniform across the frequency range. ±3 oct max at random_cutoff = 1.
+        out.filter_freq = idsp::clamp(
+            p.filter_freq * std::exp2(bipolar_rand(rng_state) * p.random_cutoff * 3.f),
+            20.f, 20000.f);
         out.filter_q    = p.filter_q;
 
         out.envelope_speed  = p.envelope_speed;
