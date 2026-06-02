@@ -6,21 +6,28 @@
 namespace idsp
 {
 
-/** Classic ADSR / AR envelope.
+/** Classic ADSR / AR / AHSR envelope.
  *
- * Two trigger entry points pick the contract up-front:
+ * Trigger entry points:
  *
- *   - trigger_ar(A, R)              : Attack → Release. No sustain. Used by
- *                                     the envelope_trigger button.
- *   - trigger_adsr(A, D, S, R)      : Attack → Decay → Sustain (held) →
- *                                     Release. Used by MIDI note-on; the
- *                                     matching note-off calls release().
+ *   - trigger_ar(A, R)                   : Attack → Release. No sustain.
+ *   - trigger_adsr(A, D, S, R)           : Attack → Decay → Sustain (held) →
+ *                                          Release. Gated; call release() to
+ *                                          start the release ramp.
+ *   - trigger_ahr(A, H, S, R)            : Attack → Hold → Release. One-shot;
+ *                                          Release fires automatically when Hold
+ *                                          expires. Attack ramps to S; Hold stays
+ *                                          at S; Release ramps to 0.
+ *   - trigger_ahsr_gated(A, H, S, R)     : Attack → Hold → Sustain (held) →
+ *                                          Release. Gated; Hold is timed (H
+ *                                          samples), Sustain holds at S until
+ *                                          release() is called. Attack ramps to S.
  *
  * release() begins the release stage from whatever value is current, so an
- * early note-off during Attack/Decay produces a clean ramp-down from the
+ * early note-off during Attack/Decay/Hold produces a clean ramp-down from the
  * partial value (no jump to peak first).
  *
- * Curves: linear A, linear D, exponential (RC-style) R. No shape control.
+ * Curves: linear A, linear D, linear H, exponential (RC-style) R.
  *
  * Lives in the project under namespace idsp so the eventual promotion into
  * isl/include/idsp/envelope.hpp is a pure file move.
@@ -28,7 +35,7 @@ namespace idsp
 class Envelope
 {
 public:
-    enum class Stage { Idle, Attack, Decay, Sustain, Release };
+    enum class Stage { Idle, Attack, Hold, Decay, Sustain, Release };
 
     Envelope() = default;
 
@@ -36,9 +43,11 @@ public:
     inline void trigger_ar(size_t attack_samples, size_t release_samples)
     {
         attack_len_         = attack_samples;
+        hold_len_           = 0;
         decay_len_          = 0;
         release_len_        = release_samples;
-        sustain_level_      = 0.f;   // unused in AR mode
+        sustain_level_      = 0.f;
+        attack_target_      = 1.f;
         stage_sample_count_ = 0;
         value_              = 0.f;
         gated_              = false;
@@ -61,9 +70,11 @@ public:
                              float sustain_level, size_t release_samples)
     {
         attack_len_         = attack_samples;
+        hold_len_           = 0;
         decay_len_          = decay_samples;
         release_len_        = release_samples;
         sustain_level_      = clamp01(sustain_level);
+        attack_target_      = 1.f;
         stage_sample_count_ = 0;
         value_              = 0.f;
         gated_              = true;
@@ -73,6 +84,68 @@ public:
             value_ = 1.f;
             stage_ = (decay_samples == 0) ? Stage::Sustain : Stage::Decay;
             if (stage_ == Stage::Sustain) value_ = sustain_level_;
+        }
+        else
+        {
+            stage_ = Stage::Attack;
+        }
+    }
+
+    /** One-shot AHSR. Attack ramps 0 → sustain_level; Hold stays there;
+     *  Release fires automatically when Hold expires. */
+    inline void trigger_ahr(size_t attack_samples, size_t hold_samples,
+                            float sustain_level, size_t release_samples)
+    {
+        attack_len_         = attack_samples;
+        hold_len_           = hold_samples;
+        decay_len_          = 0;
+        release_len_        = release_samples;
+        sustain_level_      = clamp01(sustain_level);
+        attack_target_      = sustain_level_;
+        stage_sample_count_ = 0;
+        value_              = 0.f;
+        gated_              = false;
+
+        if (attack_samples == 0)
+        {
+            value_ = sustain_level_;
+            if (hold_samples > 0)
+            {
+                stage_ = Stage::Hold;
+            }
+            else
+            {
+                release_from_value_ = sustain_level_;
+                stage_ = (release_samples == 0) ? Stage::Idle : Stage::Release;
+                if (stage_ == Stage::Idle) value_ = 0.f;
+            }
+        }
+        else
+        {
+            stage_ = Stage::Attack;
+        }
+    }
+
+    /** Gated AHSR. Attack ramps 0 → sustain_level; Hold stays there for
+     *  hold_samples; then Sustain holds at sustain_level until release() is
+     *  called, which starts the Release ramp. */
+    inline void trigger_ahsr_gated(size_t attack_samples, size_t hold_samples,
+                                   float sustain_level, size_t release_samples)
+    {
+        attack_len_         = attack_samples;
+        hold_len_           = hold_samples;
+        decay_len_          = 0;
+        release_len_        = release_samples;
+        sustain_level_      = clamp01(sustain_level);
+        attack_target_      = sustain_level_;
+        stage_sample_count_ = 0;
+        value_              = 0.f;
+        gated_              = true;
+
+        if (attack_samples == 0)
+        {
+            value_ = sustain_level_;
+            stage_ = (hold_samples > 0) ? Stage::Hold : Stage::Sustain;
         }
         else
         {
@@ -109,9 +182,13 @@ public:
                 ++stage_sample_count_;
                 if (stage_sample_count_ >= attack_len_)
                 {
-                    value_ = 1.f;
+                    value_ = attack_target_;
                     stage_sample_count_ = 0;
-                    if (gated_)
+                    if (hold_len_ > 0)
+                    {
+                        stage_ = Stage::Hold;
+                    }
+                    else if (gated_)
                     {
                         stage_ = (decay_len_ == 0) ? Stage::Sustain : Stage::Decay;
                         if (stage_ == Stage::Sustain) value_ = sustain_level_;
@@ -119,7 +196,7 @@ public:
                     else
                     {
                         // AR: skip decay/sustain, head straight to release.
-                        release_from_value_ = 1.f;
+                        release_from_value_ = attack_target_;
                         stage_ = (release_len_ == 0) ? Stage::Idle : Stage::Release;
                         if (stage_ == Stage::Idle) value_ = 0.f;
                     }
@@ -127,7 +204,29 @@ public:
                 else
                 {
                     value_ = static_cast<float>(stage_sample_count_)
-                           / static_cast<float>(attack_len_);
+                           / static_cast<float>(attack_len_)
+                           * attack_target_;
+                }
+                return value_;
+            }
+
+            case Stage::Hold:
+            {
+                ++stage_sample_count_;
+                if (stage_sample_count_ >= hold_len_)
+                {
+                    value_ = sustain_level_;
+                    stage_sample_count_ = 0;
+                    if (gated_)
+                    {
+                        stage_ = Stage::Sustain;
+                    }
+                    else
+                    {
+                        release_from_value_ = sustain_level_;
+                        stage_ = (release_len_ == 0) ? Stage::Idle : Stage::Release;
+                        if (stage_ == Stage::Idle) value_ = 0.f;
+                    }
                 }
                 return value_;
             }
@@ -166,9 +265,8 @@ public:
                 }
                 else
                 {
-                    // Exponential (RC-style) release: 1 - (1-t)^2 inverted to
-                    // start fast and tail off. Ramps from release_from_value_
-                    // down to 0.
+                    // Exponential (RC-style) release: starts fast and tails off.
+                    // Ramps from release_from_value_ down to 0.
                     const float t = static_cast<float>(stage_sample_count_)
                                   / static_cast<float>(release_len_);
                     const float one_minus_t = 1.f - t;
@@ -185,19 +283,20 @@ public:
 
     inline bool is_active() const { return stage_ != Stage::Idle; }
 
-    /** Lifetime progress in [0, 1] across A+D+R for AR/ADSR. During Sustain,
-     *  sits at the D→R boundary (the gate is held). Returns 0 when Idle. */
+    /** Lifetime progress in [0, 1] across A+H+D+R. During Sustain, sits at
+     *  the (H+D)→R boundary (the gate is held). Returns 0 when Idle. */
     inline float get_phase() const
     {
-        const size_t total = attack_len_ + decay_len_ + release_len_;
+        const size_t total = attack_len_ + hold_len_ + decay_len_ + release_len_;
         if (total == 0) return 0.f;
         size_t elapsed = 0;
         switch (stage_)
         {
             case Stage::Attack:  elapsed = stage_sample_count_; break;
-            case Stage::Decay:   elapsed = attack_len_ + stage_sample_count_; break;
-            case Stage::Sustain: elapsed = attack_len_ + decay_len_; break;
-            case Stage::Release: elapsed = attack_len_ + decay_len_ + stage_sample_count_; break;
+            case Stage::Hold:    elapsed = attack_len_ + stage_sample_count_; break;
+            case Stage::Decay:   elapsed = attack_len_ + hold_len_ + stage_sample_count_; break;
+            case Stage::Sustain: elapsed = attack_len_ + hold_len_ + decay_len_; break;
+            case Stage::Release: elapsed = attack_len_ + hold_len_ + decay_len_ + stage_sample_count_; break;
             case Stage::Idle:
             default:             elapsed = 0; break;
         }
@@ -220,9 +319,11 @@ private:
 
     Stage  stage_{Stage::Idle};
     size_t attack_len_{0};
+    size_t hold_len_{0};
     size_t decay_len_{0};
     size_t release_len_{0};
     float  sustain_level_{1.f};
+    float  attack_target_{1.f};
     size_t stage_sample_count_{0};
     float  release_from_value_{1.f};
     float  value_{0.f};

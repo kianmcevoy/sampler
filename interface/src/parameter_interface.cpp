@@ -56,8 +56,12 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input,
     p.sustain = input.controls.sliders.at("sustain");
     p.release = input.controls.sliders.at("release");
 
+    p.filter_freq = input.controls.sliders.at("filter_freq");
+    p.filter_q    = input.controls.sliders.at("filter_q");
+
     p.voice_stealing   = input.controls.buttons.at("voice_stealing");
     p.envelope_trigger = input.controls.triggers.at("envelope_trigger");
+    p.scale_envelope   = input.controls.buttons.at("scale_envelope");
 
     p.random_speed  = input.controls.sliders.at("random_speed");
     p.random_start  = input.controls.sliders.at("random_start");
@@ -70,6 +74,8 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input,
     p.envelope_length = input.controls.sliders.at("envelope_length");
     p.envelope_level  = input.controls.sliders.at("envelope_level");
     p.envelope_pan    = input.controls.sliders.at("envelope_pan");
+    p.envelope_cutoff = input.controls.sliders.at("envelope_cutoff");
+    p.envelope_resonance = input.controls.sliders.at("envelope_resonance");
 
     p.phase_speed  = input.controls.sliders.at("phase_speed");
     p.phase_start  = input.controls.sliders.at("phase_start");

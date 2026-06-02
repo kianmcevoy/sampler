@@ -37,6 +37,11 @@ struct VoiceLiveParams
     float sustain       { 0.8f };
     float release       { 0.3f };
 
+    // Filter parameters
+    float sample_rate_inv { 1.f / 48000.f };
+    float filter_freq     { 10000.f };
+    float filter_q        { 0.5f };
+
     // Envelope-driven modulation depths for the five playback params.
     // Bipolar [-1, +1]; the Voice applies them as `depth * envelope_value`.
     float envelope_speed  { 0.f };
@@ -44,6 +49,8 @@ struct VoiceLiveParams
     float envelope_length { 0.f };
     float envelope_level  { 0.f };
     float envelope_pan    { 0.f };
+    float envelope_cutoff { 0.f };
+    float envelope_resonance { 0.f };
 
     // Playhead-phase modulation depths for the same five playback params.
     // `phase` here means the voice's progress through its loop region in
@@ -72,6 +79,11 @@ struct VoiceLiveParams
     // pitch_deviation; OFF ⇒ the voice runs as a single playhead with a
     // loop-boundary crossfade (pitch tracks speed exactly).
     bool  timestretch      { false };
+
+    // Loop-scaled AHSR envelope mode. When true, the envelope_trigger and MIDI
+    // note-on fire an AHSR shape whose A/H/R durations are fractions of the
+    // active loop's output duration rather than fixed 0–5 s values.
+    bool  scale_envelope   { false };
 
     // Per-grain random depth (0 = identical grains, 0.5 = decorrelating,
     // 1 = spray). Applied inside Voice at each grain spawn.
@@ -151,6 +163,11 @@ struct ParameterData
     float release;
     bool  voice_stealing;
     bool  envelope_trigger;
+    bool  scale_envelope;
+
+    // --- filter parameters ---
+    float filter_freq     { 10000.f };
+    float filter_q        { 0.5f };
 
     // --- per-launch random jitter (applied once, at trigger time) ---
     float random_speed;
@@ -158,6 +175,8 @@ struct ParameterData
     float random_length;
     float random_level;
     float random_pan;
+    float random_cutoff;
+    float random_resonance;
 
     // --- envelope modulation depths (bipolar [-1, +1]) ---
     float envelope_speed;
@@ -165,6 +184,8 @@ struct ParameterData
     float envelope_length;
     float envelope_level;
     float envelope_pan;
+    float envelope_cutoff;
+    float envelope_resonance;
 
     // --- playhead-phase modulation depths (bipolar [-1, +1]) ---
     float phase_speed;

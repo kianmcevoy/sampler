@@ -46,6 +46,15 @@ class GuiControlBuilder
                         float min, float max, float default_value,
                         float x, float y, float w = 120.f, float h = 120.f);
 
+        /** Add a slider with a fully custom NormalisableRange (e.g. with a skew
+         *  factor for logarithmic/exponential response). The range's convertFrom0to1
+         *  mapping is used both for the display value and for the value returned
+         *  by `input.controls.sliders.at(id)` in ParameterInterface.
+         */
+        void add_slider(const juce::String& panel, const juce::String& identifier, const juce::String& label,
+                        const juce::NormalisableRange<float>& range, float default_value,
+                        float x, float y, float w = 120.f, float h = 120.f);
+
         void add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                         float x, float y, float w = 120.f, float h = 120.f);
 

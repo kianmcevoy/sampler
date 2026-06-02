@@ -61,11 +61,16 @@ namespace
         out.sustain = p.sustain;
         out.release = p.release;
 
+        out.filter_freq = p.filter_freq;
+        out.filter_q    = p.filter_q;
+
         out.envelope_speed  = p.envelope_speed;
         out.envelope_start  = p.envelope_start;
         out.envelope_length = p.envelope_length;
         out.envelope_level  = p.envelope_level;
         out.envelope_pan    = p.envelope_pan;
+        out.envelope_cutoff = p.envelope_cutoff;
+        out.envelope_resonance = p.envelope_resonance;
 
         out.phase_speed  = p.phase_speed;
         out.phase_start  = p.phase_start;
@@ -78,6 +83,7 @@ namespace
         out.shape_deviation  = p.shape_deviation;
         out.grains_deviation = p.grains_deviation;
         out.timestretch      = p.timestretch;
+        out.scale_envelope   = p.scale_envelope;
         out.random_pitch     = p.random_pitch;
         out.random_size      = p.random_size;
         out.random_shape     = p.random_shape;
@@ -145,11 +151,16 @@ namespace
         out.sustain = p.sustain;
         out.release = p.release;
 
+        out.filter_freq = p.filter_freq;
+        out.filter_q    = p.filter_q;
+
         out.envelope_speed  = p.envelope_speed;
         out.envelope_start  = p.envelope_start;
         out.envelope_length = p.envelope_length;
         out.envelope_level  = p.envelope_level;
         out.envelope_pan    = p.envelope_pan;
+        out.envelope_cutoff = p.envelope_cutoff;
+        out.envelope_resonance = p.envelope_resonance;
 
         out.phase_speed  = p.phase_speed;
         out.phase_start  = p.phase_start;
@@ -162,6 +173,7 @@ namespace
         out.shape_deviation  = p.shape_deviation;
         out.grains_deviation = p.grains_deviation;
         out.timestretch      = p.timestretch;
+        out.scale_envelope   = p.scale_envelope;
         out.random_pitch     = p.random_pitch;
         out.random_size      = p.random_size;
         out.random_shape     = p.random_shape;
@@ -184,11 +196,16 @@ namespace
         out.sustain = p.sustain;
         out.release = p.release;
 
+        out.filter_freq = p.filter_freq;
+        out.filter_q    = p.filter_q;
+
         out.envelope_speed  = p.envelope_speed;
         out.envelope_start  = p.envelope_start;
         out.envelope_length = p.envelope_length;
         out.envelope_level  = p.envelope_level;
         out.envelope_pan    = p.envelope_pan;
+        out.envelope_cutoff = p.envelope_cutoff;
+        out.envelope_resonance = p.envelope_resonance;
 
         out.phase_speed  = p.phase_speed;
         out.phase_start  = p.phase_start;
@@ -222,6 +239,12 @@ void Instrument::load(const InstrumentLoadData& /*loaded*/, InstrumentOutputData
 void Instrument::prepare(double sample_rate)
 {
     this->sample_rate_ = static_cast<float>(sample_rate);
+    this->sample_rate_inv_ = 1.f / sample_rate_;
+
+    for(auto& v : voice_live_params_)
+    {
+        v.sample_rate_inv = this->sample_rate_inv_;
+    }
 }
 
 void Instrument::process(const InstrumentInputData& input, InstrumentOutputData& output)
@@ -235,6 +258,20 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     // existing voices on other layers keep playing.
     const int editing_layer = idsp::clamp(p.current_layer, 0, static_cast<int>(max_layers) - 1);
     const size_t buffer_size = input.layer_buffers[editing_layer].loaded_sample.channel(0).size();
+
+    // When the editing layer changes, the GUI has just restored a saved slider
+    // snapshot for the new layer. Re-anchor every active voice on that layer so
+    // the scaling-pickup formula sees zero displacement and leaves them untouched.
+    if (editing_layer != prev_editing_layer_)
+    {
+        const auto new_anchor = capture_anchor(p);
+        for (size_t i = 0; i < voices_.size(); ++i)
+        {
+            if (voices_[i].is_active() && voices_[i].layer() == editing_layer)
+                voice_anchor_[i] = new_anchor;
+        }
+        prev_editing_layer_ = editing_layer;
+    }
 
     // Clear MIDI ownership + latch state for any voice that became inactive
     // since last block (natural envelope completion, stop, or voice-stealing).
@@ -346,7 +383,13 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
                     if (p.markers_enabled && p.marker_count > 0)
                     {
                         const int N    = p.marker_count;
-                        const int idx  = idsp::clamp(ev.note_number - 60, 0, N - 1);
+                        const int base = idsp::clamp(ev.note_number - 60, 0, N - 1);
+                        // Jitter the note-selected marker index so random_start
+                        // picks a randomised nearby slice rather than always
+                        // the exact note-mapped one.
+                        const int jit = static_cast<int>(std::round(
+                            bipolar_rand(rng_state_) * p.random_start * static_cast<float>(N - 1)));
+                        const int idx  = idsp::clamp(base + jit, 0, N - 1);
                         start_frac     = p.marker_fractions[idx];
                         const int span    = idsp::clamp(p.length_markers, 1, N - idx);
                         const int end_idx = idx + span;
@@ -355,7 +398,10 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
                     }
                     else
                     {
-                        start_frac  = idsp::clamp(static_cast<float>(ev.note_number) / 127.f, 0.f, 1.f);
+                        start_frac  = idsp::clamp(
+                            static_cast<float>(ev.note_number) / 127.f
+                            + bipolar_rand(rng_state_) * p.random_start,
+                            0.f, 1.f);
                         length_frac = idsp::clamp(p.length, 0.f, 1.f - start_frac);
                     }
                     voice_live_params_[slot].start  = start_frac;
@@ -363,7 +409,10 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
                     voice_effective_params_[slot]   = voice_live_params_[slot];
                 }
 
-                v->trigger_adsr_gated(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+                if (p.scale_envelope)
+                    v->trigger_ahr(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+                else
+                    v->trigger_adsr_gated(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
                 v->set_sample_loops(p.loop);
                 v->set_layer(editing_layer);
                 // Pitch routing applies the semitone offset; position routing
@@ -487,7 +536,10 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
             voice_live_params_[slot]      = build_effective_live_params(p, rng_state_);
             voice_effective_params_[slot] = voice_live_params_[slot];
             voice_anchor_[slot]           = capture_anchor(p);
-            v->trigger_ar(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+            if (p.scale_envelope)
+                v->trigger_ahr(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
+            else
+                v->trigger_ar(voice_live_params_[slot], buffer_size, sample_rate_, ++launch_counter_);
             v->set_layer(editing_layer);
         }
     }

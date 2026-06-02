@@ -45,6 +45,29 @@ void GuiControlBuilder::add_slider(const juce::String& panel, const juce::String
     this->control_panels.emplace_back(panel);
 }
 
+void GuiControlBuilder::add_slider(const juce::String& panel, const juce::String& identifier, const juce::String& label,
+                                   const juce::NormalisableRange<float>& range, float default_value,
+                                   float x, float y, float w, float h)
+{
+    this->check_id(identifier);
+
+    const float normalised_default = range.convertTo0to1(
+        juce::jlimit(range.start, range.end, default_value));
+
+    this->parameters.add(std::make_unique<juce::AudioParameterFloat>(
+        identifier, label,
+        juce::NormalisableRange<float>(0.f, 1.f),
+        normalised_default,
+        juce::AudioParameterFloatAttributes{}
+    ));
+
+    this->slider_ids.emplace_back(identifier);
+    this->parameter_ids.emplace_back(identifier);
+    this->slider_ranges.push_back(range);
+    this->control_geometries.push_back({x, y, w, h});
+    this->control_panels.emplace_back(panel);
+}
+
 void GuiControlBuilder::add_button(const juce::String& panel, const juce::String& identifier, const juce::String& label,
                                    float x, float y, float w, float h)
 {

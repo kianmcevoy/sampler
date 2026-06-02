@@ -39,6 +39,7 @@ class Instrument
         VoiceAllocator  allocator_{};
         uint64_t        launch_counter_{0};
         float           sample_rate_{48000.f};
+        float           sample_rate_inv_{1.f / sample_rate_};
         // xorshift32 state for per-launch random_* jitter. Sampled only on
         // play, not in the audio loop. Lightweight enough for MCU.
         uint32_t        rng_state_{0x12345678u};
@@ -86,6 +87,11 @@ class Instrument
         // matching note-off is silently swallowed (the voice keeps looping
         // until stop kills it). Cleared when the voice becomes inactive.
         std::array<bool, max_voices> voice_latched_{};
+
+        // Tracks the editing layer from the previous block. When it changes,
+        // voices on the new layer are re-anchored to the current slider
+        // positions so a layer snapshot restore doesn't trigger scaling pickup.
+        int prev_editing_layer_{-1};
 };
 
 #endif

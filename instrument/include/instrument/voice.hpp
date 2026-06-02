@@ -4,6 +4,7 @@
 #include "instrument/envelope.hpp"
 #include "instrument/parameter_data.hpp"
 #include "idsp/delay.hpp"
+#include "idsp/filter.hpp"
 
 #include <array>
 #include <cstddef>
@@ -45,6 +46,8 @@ public:
     void trigger_plain      (const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
     void trigger_ar         (const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
     void trigger_adsr_gated (const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
+    void trigger_ahr        (const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
+    void trigger_ahsr_gated (const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
 
     /** Apply a fresh live-param snapshot without retriggering. */
     void set_live_params(const VoiceLiveParams& p, size_t buffer_size, float sample_rate);
@@ -112,6 +115,11 @@ private:
         float  win_blend     { 0.f };
         float  level_jit     { 0.f };  // additive per-grain level offset (random_level)
         float  pan_jit       { 0.f };  // additive per-grain pan offset (random_pan)
+        // Spawn-time loop boundaries. C-OLA grains wrap against these rather
+        // than the live start_pos_/end_pos_ so a start/length scrub doesn't
+        // force-wrap mid-window grains and produce a click.
+        float  spawn_start   { 0.f };
+        float  spawn_end     { 0.f };
     };
 
     void prepare_for_trigger(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq);
@@ -139,15 +147,22 @@ private:
 
     // Envelope durations / sustain level (resolved against loop scaling).
     size_t env_attack_{0};
+    size_t env_hold_{0};
     size_t env_decay_{0};
     size_t env_release_{0};
     float  env_sustain_level_{0.f};
+
+    float filter_cutoff_{0.f};
+    float filter_resonance_{0.f};
 
     float depth_speed_{0.f};
     float depth_start_{0.f};
     float depth_length_{0.f};
     float depth_level_{0.f};
     float depth_pan_{0.f};
+
+    float depth_cutoff_{0.f};
+    float depth_resonance_{0.f};
 
     float depth_phase_speed_{0.f};
     float depth_phase_start_{0.f};
@@ -180,7 +195,7 @@ private:
     // Auto-derived values, recomputed in set_live_params each block.
     float pitch_ratio_         { 1.f };  // 2^pitch_deviation, signed by forward_
     float n_eff_samples_       { 1920.f };
-    float kaiser_beta_         { 6.f };  // 0..14
+    float window_index_        { 3.f };  // float index into the 7-entry window LUT array
     int   overlap_eff_         { 2 };    // grain-cluster active count
     bool  loop_crossfade_mode_ { false };
     bool  last_loop_crossfade_mode_ { false };  // detects mode flips
@@ -197,6 +212,10 @@ private:
     uint64_t     launch_seq_{0};
     EnvelopeMode envelope_mode_{EnvelopeMode::None};
     idsp::Envelope envelope_{};
+
+    //Filter
+    idsp::SVFilter filter_l;
+    idsp::SVFilter filter_r;
 };
 
 #endif

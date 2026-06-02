@@ -62,8 +62,9 @@ inline constexpr std::array<VoiceParamFloatEntry, 23> voice_param_floats = {{
     {"grains",           &VoiceLiveParams::grains_deviation},
 }};
 
-inline constexpr std::array<VoiceParamBoolEntry, 1> voice_param_bools = {{
+inline constexpr std::array<VoiceParamBoolEntry, 2> voice_param_bools = {{
     {"timestretch",      &VoiceLiveParams::timestretch},
+    {"scale_envelope",   &VoiceLiveParams::scale_envelope},
 }};
 
 #endif

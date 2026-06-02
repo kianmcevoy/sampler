@@ -89,6 +89,8 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     controls.add_slider("modulation", "envelope_speed",  "Envelope Speed",  -1.f, 1.f, 0.f, 260.f, 575.f);
 	controls.add_slider("modulation", "envelope_level",  "Envelope Level",  -1.f, 1.f, 1.f, 380.f, 575.f);
 	controls.add_slider("modulation", "envelope_pan",    "Envelope Pan",    -1.f, 1.f, 0.f, 500.f, 575.f);
+    controls.add_slider("modulation", "envelope_cutoff", "Envelope Cutoff", -1.f, 1.f, 0.f, 620.f, 575.f);
+    controls.add_slider("modulation", "envelope_resonance", "Envelope Resonance", -1.f, 1.f, 0.f, 740.f, 575.f);
 
     //playhead phase routing
     controls.add_slider("modulation", "phase_start",  "Phase Start",  -1.f, 1.f, 0.f,  20.f, 695.f);
@@ -120,10 +122,19 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	//envelope controls (ADSR)
 	controls.add_button ("main", "voice_stealing",    "Voice Stealing",    1220.f,  215.f);
     controls.add_trigger("main", "envelope_trigger", "Trigger Envelope",  1220.f,  335.f);
+    controls.add_button("main", "scale_envelope", "Scale Envelope", 1340.f, 335.f);
 	controls.add_slider ("main", "attack",  "Attack",  0.f, 1.f, 0.01f,  740.f,  335.f);
 	controls.add_slider ("main", "decay",   "Decay",   0.f, 1.f, 0.1f,   860.f,  335.f);
 	controls.add_slider ("main", "sustain", "Sustain", 0.f, 1.f, 0.8f,   980.f,  335.f);
 	controls.add_slider ("main", "release", "Release", 0.f, 1.f, 0.3f,  1100.f,  335.f);
+
+    //filter controls
+    {
+        juce::NormalisableRange<float> freq_range(20.f, 20000.f);
+        freq_range.setSkewForCentre(1000.f);
+        controls.add_slider("main", "filter_freq", "Filter Freq", freq_range, 5000.f, 980.f, 575.f);
+    }
+    controls.add_slider ("main", "filter_q",    "Filter Q",    0.5f, 30.f, 1.f,   1100.f,  575.f);
 
     //voice buttons
     static constexpr std::array<const char*, max_voices> voice_button_ids = {

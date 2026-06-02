@@ -22,16 +22,25 @@ namespace
 
     constexpr float kPi = 3.14159265358979323846f;
 
-    // --- Kaiser window LUTs ---
+    // --- Grain window LUTs ---
     //
-    // 5 precomputed Kaiser windows at β ∈ {0, 3, 6, 10, 14}. The shape slider
-    // selects two adjacent entries to interpolate between. β=0 is rectangular
-    // (constant 1), β=6 is roughly Hann-equivalent (canonical C-OLA), β=14 is
-    // very smooth / heavily-tapered. Each window is symmetric on [0, 1] with
-    // phase=0 and phase=1 mapping to the window edges.
+    // 7 precomputed windows. Indices 0-1 are non-Kaiser shapes prepended for
+    // creative use; indices 2-6 are Kaiser windows at β ∈ {0, 3, 6, 10, 14}.
+    //
+    //   0: rectangular  — constant 1  (hard, no taper)
+    //   1: downramp     — linear 1→0  (attack-biased, asymmetric)
+    //   2: Kaiser β=0   — constant 1  (same as rect; COLA anchor)
+    //   3: Kaiser β=3   — mild Hamming-like taper
+    //   4: Kaiser β=6   — Hann-equivalent (canonical C-OLA)
+    //   5: Kaiser β=10  — strong taper
+    //   6: Kaiser β=14  — very smooth / minimal sidelobes
+    //
+    // shape_deviation_ ∈ [-1, 1] maps linearly to a float index in [0, 6]:
+    //   -1 → 0 (rectangular),  0 → 3 (Kaiser β=3),  +1 → 6 (Kaiser β=14).
 
     constexpr int    kKaiserLutSize = 1024;
     constexpr size_t kKaiserCount   = 5;
+    constexpr size_t kWindowCount   = kKaiserCount + 2;  // rect + downramp + 5 Kaiser
     constexpr float  kKaiserBetas[kKaiserCount] = { 0.f, 3.f, 6.f, 10.f, 14.f };
 
     // Modified Bessel I0 via the canonical power-series expansion. Converges
@@ -61,66 +70,55 @@ namespace
         return bessel_i0(beta * std::sqrt(r2)) / bessel_i0(beta);
     }
 
-    using KaiserLut = idsp::LookupTable<float, kKaiserLutSize>;
+    using GrainWindowLut = idsp::LookupTable<float, kKaiserLutSize>;
 
-    // Build a single Kaiser LUT for the given β. Returned by value into a
-    // static array; pointer/index lookups are cheap.
-    inline std::array<KaiserLut, kKaiserCount> build_kaiser_luts()
+    inline std::array<GrainWindowLut, kWindowCount> build_window_luts()
     {
-        std::array<KaiserLut, kKaiserCount> tables{
-            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 0.0));  }},
-            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 3.0));  }},
-            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 6.0));  }},
-            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 10.0)); }},
-            KaiserLut{[](float t) { return static_cast<float>(kaiser_value(t, 14.0)); }},
+        std::array<GrainWindowLut, kWindowCount> tables{
+            GrainWindowLut{[](float)   { return 1.f;       }},          // 0: rectangular
+            GrainWindowLut{[](float t) { return 1.f - t;   }},          // 1: downramp
+            GrainWindowLut{[](float t) { return static_cast<float>(kaiser_value(t,  0.0)); }},  // 2: Kaiser β=0
+            GrainWindowLut{[](float t) { return static_cast<float>(kaiser_value(t,  3.0)); }},  // 3: Kaiser β=3
+            GrainWindowLut{[](float t) { return static_cast<float>(kaiser_value(t,  6.0)); }},  // 4: Kaiser β=6
+            GrainWindowLut{[](float t) { return static_cast<float>(kaiser_value(t, 10.0)); }},  // 5: Kaiser β=10
+            GrainWindowLut{[](float t) { return static_cast<float>(kaiser_value(t, 14.0)); }},  // 6: Kaiser β=14
         };
         return tables;
     }
 
-    const std::array<KaiserLut, kKaiserCount>& kaiser_luts()
+    const std::array<GrainWindowLut, kWindowCount>& window_luts()
     {
-        static const std::array<KaiserLut, kKaiserCount> tables = build_kaiser_luts();
+        static const std::array<GrainWindowLut, kWindowCount> tables = build_window_luts();
         return tables;
     }
 
-    // Find the two adjacent kaiser_betas entries bracketing `beta` and the
-    // linear blend factor between them. Endpoints clamp.
-    inline void select_kaiser_luts(float beta, int& a, int& b, float& blend)
+    // Select two adjacent window LUT indices from a float index in [0, kWindowCount-1].
+    inline void select_window_luts(float index, int& a, int& b, float& blend)
     {
-        if (beta <= kKaiserBetas[0])             { a = b = 0; blend = 0.f; return; }
-        if (beta >= kKaiserBetas[kKaiserCount-1]){ a = b = kKaiserCount-1; blend = 0.f; return; }
-        for (size_t i = 0; i + 1 < kKaiserCount; ++i)
-        {
-            if (beta <= kKaiserBetas[i+1])
-            {
-                a = static_cast<int>(i);
-                b = static_cast<int>(i + 1);
-                blend = (beta - kKaiserBetas[i]) / (kKaiserBetas[i+1] - kKaiserBetas[i]);
-                return;
-            }
-        }
-        a = b = kKaiserCount - 1; blend = 0.f;
+        const float clamped = idsp::clamp(index, 0.f, static_cast<float>(kWindowCount - 1));
+        a     = static_cast<int>(clamped);
+        b     = std::min(a + 1, static_cast<int>(kWindowCount) - 1);
+        blend = clamped - static_cast<float>(a);
     }
 
-    // Read the (a, b, blend) Kaiser combination at `phase`∈[0,1].
-    inline float read_kaiser_window(int a, int b, float blend, float phase)
+    // Read the blended window at `phase` ∈ [0, 1].
+    inline float read_window(int a, int b, float blend, float phase)
     {
-        const auto& luts = kaiser_luts();
+        const auto& luts = window_luts();
         const float pc = idsp::clamp(phase, 0.f, 1.f);
         const float va = luts[a].read(pc);
         const float vb = luts[b].read(pc);
         return (1.f - blend) * va + blend * vb;
     }
 
-    // Minimum overlap count for C-OLA reconstruction at the chosen β.
-    // Rule of thumb: rect (β≈0) needs no overlap (1), Hann-like (β≈6) needs 2,
-    // Blackman-like (β≈8-10) needs 3, very smooth (β≈14) needs 4+.
-    inline int cola_overlap_for_beta(float beta)
+    // Minimum overlap count for C-OLA reconstruction at the given window index.
+    // rect/downramp need 1-2; Hann-like (index 4) needs 2; high-β Kaisers need 3-4.
+    inline int cola_overlap_for_window(float index)
     {
-        if (beta < 1.5f)  return 1;
-        if (beta < 4.5f)  return 2;
-        if (beta < 8.5f)  return 3;
-        return 4;
+        constexpr int overlaps[kWindowCount] = { 1, 2, 1, 2, 2, 3, 4 };
+        const int i = idsp::clamp(static_cast<int>(std::round(index)),
+                                  0, static_cast<int>(kWindowCount) - 1);
+        return overlaps[i];
     }
 
     // xorshift32 — local rng for per-grain jitter.
@@ -202,25 +200,52 @@ void Voice::set_live_params(const VoiceLiveParams& p, size_t buffer_size, float 
     // envelope_trigger AR → false); each trigger_* sets it before calling
     // this function. Don't overwrite it here.
 
-    // Envelope durations are always 0..5 s, scaled by sample_rate. This is
-    // independent of loop state — A/D/R sliders always map to seconds.
-    const auto resolve_dur = [&](float slider_value) -> size_t
+    if (p.scale_envelope)
     {
-        const float scale = 5.f * sample_rate;
-        const auto raw = static_cast<size_t>(idsp::clamp(slider_value, 0.f, 1.f) * scale);
-        return raw == 0 ? 1 : raw;
-    };
+        // decay slider is the master duration: total = decay × loop_duration.
+        // attack / release sliders are fractions of that total; hold fills the rest.
+        // `length_` was just computed above; speed_abs is the position traversal
+        // rate (|p.speed| — excludes MIDI pitch offset, which is exact for the
+        // beat-slicer Position routing use case).
+        const float speed_abs = std::max(std::abs(p.speed), 0.001f);
+        const float loop_dur  = static_cast<float>(length_) / speed_abs;
+        const float total_dur = idsp::clamp(p.decay, 0.f, 1.f) * loop_dur;
+        const float a_frac    = idsp::clamp(p.attack,  0.f, 1.f);
+        const float r_frac    = idsp::clamp(p.release, 0.f, 1.f);
+        const float h_frac    = idsp::clamp(1.f - a_frac - r_frac, 0.f, 1.f);
 
-    env_attack_        = resolve_dur(p.attack);
-    env_decay_         = resolve_dur(p.decay);
-    env_release_       = resolve_dur(p.release);
+        env_attack_  = static_cast<size_t>(a_frac * total_dur);
+        env_hold_    = static_cast<size_t>(h_frac * total_dur);
+        env_release_ = static_cast<size_t>(r_frac * total_dur);
+        env_decay_   = 0;
+    }
+    else
+    {
+        // Fixed 0..5 s mapping, independent of loop region.
+        const auto resolve_dur = [&](float slider_value) -> size_t
+        {
+            const float scale = 5.f * sample_rate;
+            const auto raw = static_cast<size_t>(idsp::clamp(slider_value, 0.f, 1.f) * scale);
+            return raw == 0 ? 1 : raw;
+        };
+
+        env_attack_  = resolve_dur(p.attack);
+        env_decay_   = resolve_dur(p.decay);
+        env_hold_    = 0;
+        env_release_ = resolve_dur(p.release);
+    }
     env_sustain_level_ = idsp::clamp(p.sustain, 0.f, 1.f);
+
+    filter_cutoff_ = p.filter_freq * p.sample_rate_inv;
+    filter_resonance_ = p.filter_q;
 
     depth_speed_  = p.envelope_speed;
     depth_start_  = p.envelope_start;
     depth_length_ = p.envelope_length;
     depth_level_  = p.envelope_level;
     depth_pan_    = p.envelope_pan;
+    depth_cutoff_ = p.envelope_cutoff;
+    depth_resonance_ = p.envelope_resonance;
 
     depth_phase_speed_  = p.phase_speed;
     depth_phase_start_  = p.phase_start;
@@ -265,14 +290,14 @@ void Voice::set_live_params(const VoiceLiveParams& p, size_t buffer_size, float 
     const float n_eff_s    = idsp::clamp(n_auto_s * size_scale, 0.020f, 0.200f);
     n_eff_samples_ = std::max(1.f, n_eff_s * sample_rate_);
 
-    // 3. Kaiser β from shape_deviation: -1 → 0, 0 → 6, +1 → 14 (piecewise linear).
-    kaiser_beta_ = (shape_deviation_ < 0.f)
-        ? (6.f + shape_deviation_ * 6.f)
-        : (6.f + shape_deviation_ * 8.f);
+    // 3. Window index from shape_deviation: linearly maps [-1, 1] → [0, kWindowCount-1].
+    //    Index 0 = rectangular, 1 = downramp, 2-6 = Kaiser β ∈ {0, 3, 6, 10, 14}.
+    window_index_ = (shape_deviation_ + 1.f) * 0.5f * static_cast<float>(kWindowCount - 1);
+    window_index_ = idsp::clamp(window_index_, 0.f, static_cast<float>(kWindowCount - 1));
 
     // 4. Grain count from grains_deviation. -1 → 1 grain, 0 → C-OLA minimum
-    //    for the chosen β (2/3/4), +1 → 8 grains. Piecewise linear.
-    const int auto_overlap = cola_overlap_for_beta(kaiser_beta_);
+    //    for the chosen window (1/2/3/4), +1 → 8 grains. Piecewise linear.
+    const int auto_overlap = cola_overlap_for_window(window_index_);
     int eff;
     if (grains_deviation_ <= 0.f)
     {
@@ -291,6 +316,8 @@ void Voice::set_live_params(const VoiceLiveParams& p, size_t buffer_size, float 
     //    playhead at original pitch). Granular C-OLA only runs when
     //    timestretch is ON.
     loop_crossfade_mode_ = !timestretch_;
+
+
 }
 
 float Voice::loop_position_fraction() const
@@ -383,7 +410,9 @@ void Voice::spawn_cola_grain(size_t slot, float base_read_pos)
     const float pos_jit = per_grain_jitter(grain_rng_, random_position_, n_eff_samples_);
     const float start_f = static_cast<float>(start_pos_);
     const float end_f   = static_cast<float>(end_pos_);
-    g.read_pos = wrap_position(base_read_pos + pos_jit, start_f, end_f);
+    g.read_pos    = wrap_position(base_read_pos + pos_jit, start_f, end_f);
+    g.spawn_start = start_f;
+    g.spawn_end   = end_f;
 
     // Per-grain pitch jitter, up to ±1 octave at depth=1. The voice's
     // `pitch_ratio_` already incorporates both the slider pitch_deviation
@@ -398,10 +427,13 @@ void Voice::spawn_cola_grain(size_t slot, float base_read_pos)
     const float n_samples  = std::max(1.f, n_eff_samples_ * std::exp2(size_jit));
     g.phase_inc = 1.f / n_samples;
 
-    // Per-grain shape jitter shifts Kaiser β within [0, 14].
-    const float shape_jit  = per_grain_jitter(grain_rng_, random_shape_, 7.f);
-    const float beta_local = idsp::clamp(kaiser_beta_ + shape_jit, 0.f, 14.f);
-    select_kaiser_luts(beta_local, g.win_lut_a, g.win_lut_b, g.win_blend);
+    // Per-grain shape jitter in window-index space. Spray range = full span so
+    // at depth=1 any window can be reached from any base index.
+    const float shape_jit   = per_grain_jitter(grain_rng_, random_shape_,
+                                               static_cast<float>(kWindowCount - 1));
+    const float index_local = idsp::clamp(window_index_ + shape_jit,
+                                          0.f, static_cast<float>(kWindowCount - 1));
+    select_window_luts(index_local, g.win_lut_a, g.win_lut_b, g.win_blend);
 
     // Per-grain level and pan jitter. Both are additive offsets to the
     // voice's base_level_ / base_pan_, applied per-grain inside process()
@@ -516,6 +548,26 @@ void Voice::trigger_adsr_gated(const VoiceLiveParams& p, size_t buffer_size, flo
     envelope_.trigger_adsr(env_attack_, env_decay_, env_sustain_level_, env_release_);
 }
 
+void Voice::trigger_ahr(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
+{
+    sample_loops_         = false;  // one-shot: self-terminates when envelope ends
+    midi_octave_offset_   = 0.f;
+    midi_velocity_factor_ = 1.f;
+    this->prepare_for_trigger(p, buffer_size, sample_rate, seq);
+    envelope_mode_ = EnvelopeMode::AR;
+    envelope_.trigger_ahr(env_attack_, env_hold_, env_sustain_level_, env_release_);
+}
+
+void Voice::trigger_ahsr_gated(const VoiceLiveParams& p, size_t buffer_size, float sample_rate, uint64_t seq)
+{
+    sample_loops_         = true;
+    midi_octave_offset_   = 0.f;
+    midi_velocity_factor_ = 1.f;
+    this->prepare_for_trigger(p, buffer_size, sample_rate, seq);
+    envelope_mode_ = EnvelopeMode::ADSR;
+    envelope_.trigger_ahsr_gated(env_attack_, env_hold_, env_sustain_level_, env_release_);
+}
+
 void Voice::set_midi_offsets(float octave_offset, float velocity_factor)
 {
     midi_octave_offset_   = octave_offset;
@@ -530,7 +582,10 @@ void Voice::kill()
 
 void Voice::release()
 {
-    if (envelope_mode_ == EnvelopeMode::ADSR) envelope_.release();
+    // AR covers scale_envelope MIDI voices (self-terminating AHR but note-off
+    // can still cut short the hold/attack and jump straight to release).
+    if (envelope_mode_ == EnvelopeMode::ADSR || envelope_mode_ == EnvelopeMode::AR)
+        envelope_.release();
 }
 
 void Voice::retrigger_position()
@@ -596,6 +651,21 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
     const float effective_end = (length_mod != 0.f)
         ? static_cast<float>(end_pos_) + length_mod * static_cast<float>(length_)
         : static_cast<float>(end_pos_);
+
+    // --- Cutoff / Resonance modulation (bipolar [-1, +1]) ---
+    float cutoff_mod;
+    if(depth_cutoff_ >= 0.f) cutoff_mod = (1.f - depth_cutoff_) + depth_cutoff_ * e;
+    else                     cutoff_mod = 1.f + depth_cutoff_ * (1.f - e);
+
+    float resonance_mod;
+    if(depth_resonance_ >= 0.f) resonance_mod = (1.f - depth_resonance_) + depth_resonance_ * e;
+    else                         resonance_mod = 1.f + depth_resonance_ * (1.f - e);
+
+    // Clamp before SVFilter: tan(π·f) blows up at f≥0.5; k=1/Q blows up at Q=0.
+    const float safe_cutoff = idsp::clamp(cutoff_mod * filter_cutoff_, 0.f, 0.499f);
+    const float safe_q      = idsp::max(resonance_mod * filter_resonance_, 0.1f);
+    filter_l.set_parameters(safe_cutoff, safe_q);
+    filter_r.set_parameters(safe_cutoff, safe_q);
 
     // --- Level / Pan modulation factors (uniform across grains) ---
     // The env/phase mod chain is uniform across all grains active this
@@ -694,15 +764,53 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
             compute_pan_gains_lut(g_pan, g_pan_l, g_pan_r);
 
             const float rp = g.read_pos + read_offset;
+
             acc_l += amp * g_level * g_pan_l * left.read_at(rp);
             acc_r += amp * g_level * g_pan_r * right.read_at(rp);
+
+            filter_l.process(acc_l);
+            filter_r.process(acc_r);
+
+            acc_l = filter_l.get_lowpass();
+            acc_r = filter_r.get_lowpass();
 
             // Loop-crossfade mode is the "single playhead" case — read rate
             // follows live `speed`, not a snapshot taken at spawn time. This
             // makes speed-slider edits take effect immediately rather than at
             // the next loop seam.
             g.read_pos += speed;
-            wrap_grain_read(g, start_f, end_f);
+
+            if (g.role == Grain::Role::Body)
+            {
+                // Don't hard-wrap the Body grain at loop boundaries — trigger a
+                // crossfade instead. This covers both the natural loop-end case
+                // (backup to the proactive dist check above) and the start/length
+                // scrub case where the boundary moved past the grain mid-playback.
+                // Without this, a hard wrap here produces an audible click.
+                if (g.read_pos >= end_f || g.read_pos < start_f)
+                {
+                    if (sample_loops_ && !grains_[1].active && shape_deviation_ > -0.99f)
+                    {
+                        g.role      = Grain::Role::FadeOut;
+                        g.phase     = 0.f;
+                        g.phase_inc = 1.f / half_window_samples;
+                        this->spawn_grain_loop_xfade(
+                            1, Grain::Role::FadeIn,
+                            forward_ ? start_f : (end_f - 1.f),
+                            1.f / half_window_samples);
+                    }
+                    else
+                    {
+                        // shape=-1 (hard step) or crossfade already running:
+                        // fall back to the hard wrap.
+                        wrap_grain_read(g, start_f, end_f);
+                    }
+                }
+            }
+            else
+            {
+                wrap_grain_read(g, start_f, end_f);
+            }
 
             if (g.role != Grain::Role::Body)
             {
@@ -747,7 +855,7 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
         {
             if (!g.active) continue;
 
-            const float amp = read_kaiser_window(g.win_lut_a, g.win_lut_b, g.win_blend, g.phase);
+            const float amp = read_window(g.win_lut_a, g.win_lut_b, g.win_blend, g.phase);
 
             // Per-grain level + pan with random jitter baked in.
             const float g_level = idsp::clamp(base_level_ + g.level_jit, 0.f, 1.f)
@@ -757,11 +865,22 @@ Voice::StereoFrame Voice::process(const idsp::LagrangeDelay<524288>& left,
             compute_pan_gains_lut(g_pan, g_pan_l, g_pan_r);
 
             const float rp  = g.read_pos + read_offset;
+
             acc_l += amp * g_level * g_pan_l * left.read_at(rp);
             acc_r += amp * g_level * g_pan_r * right.read_at(rp);
 
+            filter_l.process(acc_l);
+            filter_r.process(acc_r);
+
+            acc_l = filter_l.get_lowpass();
+            acc_r = filter_r.get_lowpass();
+
             g.read_pos += g.pitch_ratio;
-            wrap_grain_read(g, start_f, end_f);
+            // Wrap against spawn-time boundaries so a live start/length scrub
+            // doesn't jump mid-window grains and produce a click. New grains
+            // always spawn at the updated position_, so start changes are
+            // smoothly absorbed by the grain cluster's natural overlap.
+            wrap_grain_read(g, g.spawn_start, g.spawn_end);
 
             g.phase += g.phase_inc;
             if (g.phase >= 1.f) g.active = false;

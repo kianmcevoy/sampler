@@ -165,16 +165,11 @@ void MainComponent::timerCallback()
         }
     }
 
-    // Bidirectional position slider — write the audio-published playback
-    // position into the JUCE `position` parameter only when the user isn't
-    // dragging. We also publish the gesture state to gui_input so the audio
-    // thread knows whether to treat the slider as a scrub command.
+    // Publish the gesture state so the audio thread knows whether to treat
+    // the position slider as a scrub command. No longer mirror playback
+    // position back into the slider — avoids constant redraws on the GUI thread.
     const bool position_dragged = this->main_panel.is_slider_being_gestured("position");
     this->processor.get_gui_input_data().position_scrubbing.store(position_dragged);
-    if (!position_dragged)
-    {
-        this->set_float_juce("position", gui_output.playback_position_normalized.load());
-    }
 
     // Grey out the pitch slider when timestretch is OFF — its value is
     // forced to 0 inside Voice, so visually communicating "ignored" helps.
@@ -271,11 +266,14 @@ void MainComponent::on_voice_button_clicked(size_t voice_index)
         {
             // Snap-on-select for layers: save current slider/button/dropdown
             // values into the layer we're leaving, then restore the layer
-            // we're entering.
-            this->save_juce_into_layer(static_cast<size_t>(this->current_layer_));
-            this->restore_layer_into_juce(static_cast<size_t>(new_layer));
+            // we're entering. Publish selected_layer before restoring JUCE
+            // params so the audio thread switches layer context before it sees
+            // the new slider values — the Instrument re-anchors on layer change.
+            const int old_layer = this->current_layer_;
             this->current_layer_ = new_layer;
             this->processor.get_gui_input_data().selected_layer.store(new_layer);
+            this->save_juce_into_layer(static_cast<size_t>(old_layer));
+            this->restore_layer_into_juce(static_cast<size_t>(new_layer));
         }
         this->refresh_layer_button_visuals();
         return;
@@ -317,11 +315,8 @@ void MainComponent::set_float_juce(const juce::String& id, float displayed_value
         if (fp->getParameterID() == id)
         {
             const auto& range = this->processor.float_param_ranges[i];
-            const float width = range.end - range.start;
-            const float normalised = (width != 0.f)
-                ? juce::jlimit(0.f, 1.f, (displayed_value - range.start) / width)
-                : 0.f;
-            fp->setValueNotifyingHost(normalised);
+            fp->setValueNotifyingHost(range.convertTo0to1(
+                juce::jlimit(range.start, range.end, displayed_value)));
             return;
         }
     }
