@@ -1,9 +1,15 @@
 #ifndef SYSTEM_EDITOR_H
 #define SYSTEM_EDITOR_H
 
-#include "system/main_component.hpp"
-
 #include "JuceHeader.h"
+
+#if JUCE_ANDROID
+    #include "system/main_component_android.hpp"
+    using PlatformMainComponent = MainComponentAndroid;
+#else
+    #include "system/main_component.hpp"
+    using PlatformMainComponent = MainComponent;
+#endif
 
 namespace juce
 {
@@ -37,7 +43,7 @@ private:
 
     EngineAudioProcessor& audioProcessor;
 
-    MainComponent main_component;
+    PlatformMainComponent main_component;
 };
 
 #endif

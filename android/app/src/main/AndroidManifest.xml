@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          android:versionCode="1" android:versionName="0.1.0">
+
+    <!-- Audio recording (mic / line input) — runtime-requested by JUCE on
+         first record press. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Read audio files via SAF (Storage Access Framework). On API 33+ the
+         legacy storage permissions are replaced by READ_MEDIA_AUDIO. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                     android:maxSdkVersion="32"/>
+    <!-- Foreground service for audio playback while screen is off (future). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- POST_NOTIFICATIONS for any user-facing prompts JUCE generates. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- USB MIDI device support via JUCE's MIDI subsystem. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false"/>
+
+    <supports-screens android:smallScreens="true"
+                      android:normalScreens="true"
+                      android:largeScreens="true"
+                      android:xlargeScreens="true"
+                      android:anyDensity="true"/>
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:name="com.rmsl.juce.JuceApp"
+        android:hardwareAccelerated="true"
+        android:allowBackup="false">
+
+        <activity
+            android:name="com.rmsl.juce.JuceActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|navigation|smallestScreenSize|screenLayout|uiMode"
+            android:screenOrientation="landscape"
+            android:launchMode="singleTask"
+            android:exported="true"
+            android:hardwareAccelerated="true">
+            <intent-filter>
+                <action   android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <receiver android:name="com.rmsl.juce.Receiver" android:exported="false"/>
+    </application>
+</manifest>

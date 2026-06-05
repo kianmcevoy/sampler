@@ -250,7 +250,7 @@ Defined in [gui/src/controls.cpp](gui/src/controls.cpp) via the `GuiControlBuild
 
 | Group | Identifiers | Type |
 | --- | --- | --- |
-| Transport | `load_sample`, `play`, `stop`, `stop_all`, `latch`, `loop`, `timestretch` | triggers + buttons |
+| Transport | `load_sample`, `play`, `stop`, `stop_all`, `latch`, `loop`, `timestretch`, `record`, `stop_record`, `erase_layer` | triggers + buttons |
 | Playback | `start`, `length`, `speed`, `level`, `pan`, `position` | sliders |
 | Granular | `pitch`, `size`, `shape`, `grains` | sliders (bipolar) |
 | Per-launch random | `random_start/length/speed/level/pan` | sliders |
@@ -305,3 +305,66 @@ All `add_*` methods take a `panel` string as the first argument.
 - **Audio-thread file I/O**: `ParameterInterface` loads sample files synchronously inside `process()`, including onset detection. This is acceptable for prototyping but blocks the audio thread for the duration of the file read — fine on desktop, won't fly on hardware. To be moved to a worker thread eventually.
 - **MIDI velocity 0 is note-off**: don't forget the running-status convention when adding new MIDI handlers — JUCE delivers velocity-0 NoteOn messages literally, and `ParameterInterface::process_midi` routes them through `emit_note_off`. If you add code that reads NoteOn velocity directly, replicate that check.
 - **`file(GLOB ...)` in CMakeLists.txt**: adding or removing a `.cpp` requires re-running `cmake ..` before the next build — the glob result is cached at configure time.
+
+## Recording (per-layer, 10 s)
+
+Each of the 8 layers can capture audio from the host input. State lives in `ParameterInterface`:
+
+- `recording_layer_` — -1 idle, else 0..max_layers-1 capturing.
+- `recording_sample_pos_` — sample count into the buffer.
+- `max_record_samples_` — `sample_rate * 10` (capped at LagrangeDelay capacity 524288).
+
+The GUI fires REC / STOP / ERASE by setting `GuiInputData::record_start_request` / `record_stop_request` / `erase_request` atomics. ParameterInterface drains them at the end of `process()` with `exchange(false)`. Status flows back through `GuiOutputData::is_recording` and `record_progress`.
+
+The capture flow:
+1. **start_recording**: zero the target layer's `loaded_sample`, reset the `LagrangeDelay` pair, set `p.stop = true` for the block (so voices already on that layer die before reading mutated memory).
+2. **process_recording** (each block while active): copy the input audio block into `loaded_sample.channel(0)/channel(1)`. Advance the write head. Auto-call stop_recording at 10 s.
+3. **stop_recording**: replay the captured `loaded_sample` into both LagrangeDelays (the only way to populate them — they're write-only append). Re-run onset detection. Republish waveform if the recorded layer is the displayed layer.
+4. **erase_layer_buffer**: zero `loaded_sample` (resize to 0), reset LagrangeDelays, clear transient cache, clear waveform if this is the displayed layer.
+
+ParameterInterface needs the audio input + sample rate, threaded through `ParameterInterfaceInputData::audio` (a `const PolyDspBuffer&`) and `sample_rate` (a float). EngineAudioProcessor wires both in `processBlock`.
+
+## Touch trigger events (Android UI)
+
+To allow the Android `TouchWaveformView` to launch voices at specific (start, level) without disturbing the slider state, ParameterData gained a `touch_events[]` array (`max_touch_events_per_block = max_voices`) alongside `midi_events[]`. Each event carries `(start_fraction, level, target_layer)`. The Instrument processes them right after the `play` block — it allocates a voice via the standard allocator, overrides `voice_live_params_[slot].start` / `.level` with the event values, and trigger_plain's into the target layer's buffer.
+
+The GUI side uses a 16-deep single-producer/single-consumer ring in `GuiInputData`:
+- `touch_event_queue[16]` of `PendingTouchEvent`.
+- `touch_event_write_idx` (GUI writes via atomic with release semantics).
+- `touch_event_read_idx`  (audio reads via atomic with acquire semantics).
+
+For per-voice touch scrubbing (touch-and-drag on an existing playhead), `GuiInputData` gained `voice_scrub_slot / voice_scrub_position / voice_scrub_level` atomics. ParameterInterface copies them into `p.touch_scrub_*` each block. The Instrument:
+- Teleports `voices_[touch_scrub_slot]` to `touch_scrub_position` (overrides any position-slider scrub for that slot).
+- In the per-voice live-edit loop, overrides `effective.level` with `touch_scrub_level` for the same slot, regardless of Voice/Global mode.
+
+Only one voice may be scrubbed at a time (newest grab wins). Multi-touch voice triggering is unrestricted.
+
+## Android target
+
+The Android build lives in [android/](android/) and is driven by Gradle 8.11 + Android Gradle Plugin 8.4. It produces `android/app/build/outputs/apk/debug/app-debug.apk` via:
+
+```bash
+cd android
+JAVA_HOME=$HOME/android-studio/jbr ./gradlew :app:assembleDebug
+```
+
+The Gradle project calls `externalNativeBuild { cmake { path '../../CMakeLists.txt' } }` so the same root CMakeLists drives both desktop and Android. An `if (CMAKE_SYSTEM_NAME STREQUAL "Android")` branch in `CMakeLists.txt` skips VST3 and the Mac/Windows/Linux installer steps.
+
+Min SDK is 29 (forced by JUCE 8's `juce_Fonts_android.cpp` calling `AFontMatcher` which requires API 29). Target SDK is 36.
+
+### Android-only C++ surface
+
+- [system/include/system/touch_waveform.hpp](system/include/system/touch_waveform.hpp) + [system/src/touch_waveform.cpp](system/src/touch_waveform.cpp) — multi-touch waveform view. Handles tap-to-launch and tap-and-drag-to-scrub.
+- [system/include/system/main_component_android.hpp](system/include/system/main_component_android.hpp) + [system/src/main_component_android.cpp](system/src/main_component_android.cpp) — top-level Android component. Composes the top button row (8 layer/voice + view toggle + global), `TouchWaveformView`, bottom transport row (REC/PLAY/STOP/ERASE/LOAD/CTRLS/MOD), and the two panel sheets. Runs the same 100 ms timer + file-chooser handshake + snap-on-select + ModeController integration as desktop `MainComponent`.
+- [system/include/system/panel_sheet.hpp](system/include/system/panel_sheet.hpp) + [system/src/panel_sheet.cpp](system/src/panel_sheet.cpp) — slide-up overlay containing the touch-friendly controls for one panel (`"main"` or `"modulation"`). Renders sliders as `HorizontalBarSlider`, buttons as `HorizontalToggleButton`, triggers as `HorizontalTriggerButton`, dropdowns as `HorizontalDropdown` — all defined in an anonymous namespace inside `panel_sheet.cpp`.
+
+All four files are guarded by `#if JUCE_ANDROID`. Desktop builds compile them as empty translation units.
+
+[system/include/system/editor.hpp](system/include/system/editor.hpp) uses `PlatformMainComponent` (`MainComponentAndroid` on Android, `MainComponent` on desktop) so the editor doesn't need its own #ifdef branches.
+
+### Android-only behavior differences from desktop
+- Locked landscape orientation (manifest `android:screenOrientation="landscape"`).
+- The Instruo font isn't bundled into the APK; UI falls back to system sans-serif (igui::initialise_instruo_font handles the fallback automatically).
+- The default `gui/assets/voice.wav` isn't bundled either — apps launch with empty layers. User loads via SAF or records.
+- Touch contact-area level uses `MouseEvent::pressure` where supported; devices that don't expose it produce a fixed 0.8 level (see `TouchWaveformView::touch_level_from_event`).
+- Only one voice may be touch-scrubbed at a time (newest grab wins).

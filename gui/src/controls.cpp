@@ -66,7 +66,15 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
 	controls.add_trigger("main", "play",        "Play",        140.f, 215.f);
 	controls.add_trigger("main", "stop",        "Stop",        260.f, 215.f);
 	controls.add_trigger("main", "latch",       "Latch",       380.f, 215.f);
-	controls.add_button ("main", "timestretch", "Time Stretch",500.f, 215.f);
+	controls.add_button ("main", "timestretch", "Time Stretch", true, 500.f, 215.f);
+
+	// Recording — captures the audio input into the currently-selected layer's
+	// 10-second buffer. record auto-stops at 10 s; stop_record ends early.
+	// erase zeros the layer's buffer (and cancels any in-progress capture).
+	// These are also bound to touch buttons in the Android UI.
+	controls.add_trigger("main", "record",       "Record",       1460.f, 335.f);
+	controls.add_trigger("main", "stop_record",  "Stop Record",  1460.f, 455.f);
+	controls.add_trigger("main", "erase_layer",  "Erase",        1460.f, 695.f);
 
 	//playback parameters (start/length fractions of sample; speed bipolar [-4,+4])
 	controls.add_slider("main", "start",    "Start",    0.f,  1.f, 0.f,   20.f, 455.f);
@@ -182,6 +190,6 @@ void build_gui_control_scheme(GuiControlBuilder& controls)
     //loop toggle (default on = current behaviour). When off, voices play once
     //through their start..end region and self-terminate at the end, regardless
     //of envelope stage.
-    controls.add_button  ("main", "loop", "Loop", true, 1100.f, 215.f);
+    controls.add_button  ("main", "loop", "Loop", false, 1100.f, 215.f);
 
 }

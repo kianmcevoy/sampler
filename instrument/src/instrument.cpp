@@ -353,6 +353,43 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     // Stop All — kill every voice on every layer, regardless of mode.
     if (p.stop_all) voices_.kill_all();
 
+    // --- Touch trigger events ---
+    // Each event launches a voice with explicit (start, level, layer) overrides.
+    // Mirrors the `play` path otherwise — voice_anchor is captured for the
+    // event's overridden values so Global-mode scaling-pickup still behaves
+    // sensibly relative to where the touch launched it.
+    for (size_t i = 0; i < p.touch_event_count; ++i)
+    {
+        const auto& ev = p.touch_events[i];
+        const int target_layer = idsp::clamp(ev.target_layer, 0, static_cast<int>(max_layers) - 1);
+        const auto& layer_buf  = input.layer_buffers[static_cast<size_t>(target_layer)];
+        const int   tgt_buffer_size = static_cast<int>(layer_buf.loaded_sample.channel(0).size());
+        if (tgt_buffer_size == 0) continue;  // empty layer — drop
+
+        if (Voice* v = allocator_.acquire(voices_, p.voice_stealing, -1))
+        {
+            const size_t slot = static_cast<size_t>(v - &voices_[0]);
+            voice_live_params_[slot] = build_effective_live_params(p, rng_state_);
+            // Override start + level with the touch values, preserving every
+            // other slider's contribution (granular shape, envelope, etc.).
+            voice_live_params_[slot].start = idsp::clamp(ev.start_fraction, 0.f, 1.f);
+            voice_live_params_[slot].level = idsp::clamp(ev.level,          0.f, 1.f);
+            voice_effective_params_[slot] = voice_live_params_[slot];
+            // Anchor for Global-mode scaling-pickup uses the touch-overridden
+            // values so the slider returns the voice to its launched values.
+            voice_anchor_[slot]       = capture_anchor(p);
+            voice_anchor_[slot].start = voice_live_params_[slot].start;
+            voice_anchor_[slot].level = voice_live_params_[slot].level;
+
+            v->trigger_plain(voice_live_params_[slot],
+                             tgt_buffer_size, sample_rate_, ++launch_counter_);
+            v->set_sample_loops(p.loop);
+            v->set_layer(target_layer);
+            voice_midi_seq_[slot] = 0;
+        }
+        // else: fail-silent.
+    }
+
     // --- MIDI note events ---
     // Note-ons allocate a voice and trigger a gated ADSR; the matching
     // note-off finds the voice via midi_seq and calls release(), which
@@ -472,6 +509,19 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
     //     value. Gated by the GUI's gesture flag so the audio→GUI display
     //     loop doesn't masquerade as user input. Voice mode → selected,
     //     Global → all, Auto → newest. Scrub is a teleport — `speed` resumes.
+    // Touch scrub — runs unconditionally (not gated by p.position_scrubbing,
+    // since the GUI publishes it via its own gesture flag). Always wins over
+    // the position-slider scrub for the targeted slot; non-targeted slots are
+    // unaffected here and may still be scrubbed by the position-slider path
+    // below.
+    if (p.touch_scrub_slot >= 0
+        && p.touch_scrub_slot < static_cast<int>(voices_.size())
+        && voices_[static_cast<size_t>(p.touch_scrub_slot)].is_active())
+    {
+        const float pos = idsp::clamp(p.touch_scrub_position, 0.f, 1.f);
+        voices_[static_cast<size_t>(p.touch_scrub_slot)].set_loop_position_fraction(pos);
+    }
+
     if (p.position_scrubbing)
     {
         const float frac = idsp::clamp(p.position, 0.f, 1.f);
@@ -593,6 +643,17 @@ void Instrument::process(const InstrumentInputData& input, InstrumentOutputData&
             // playing the user's last-edited values across layer switches.
             effective = voice_effective_params_[vi];
         }
+
+        // Touch scrub: override the level for the targeted slot, regardless
+        // of mode. The position teleport landed earlier in the scrub block;
+        // here we just keep the level sync'd to the finger's Y position.
+        if (p.touch_scrub_slot >= 0
+            && static_cast<int>(vi) == p.touch_scrub_slot)
+        {
+            effective.level = idsp::clamp(p.touch_scrub_level, 0.f, 1.f);
+            voice_effective_params_[vi] = effective;
+        }
+
         voices_[vi].set_live_params(effective, voice_buffer_size, sample_rate_);
     }
 

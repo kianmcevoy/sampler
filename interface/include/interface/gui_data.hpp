@@ -2,6 +2,7 @@
 #define GUI_DATA_H
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <array>
@@ -68,6 +69,13 @@ struct GuiOutputData
     // active, GUI should draw nothing". Entries past marker_count are -1.
     std::array<std::atomic<int>, 64> marker_positions {};
     std::atomic<int>                 marker_count     { 0 };
+
+    // Recording state mirror. `is_recording` lights up the REC button while a
+    // capture is in progress; `record_progress` is the fraction [0, 1] of the
+    // fixed 10 s buffer that has been filled, suitable for driving a progress
+    // ring on the REC button. Both are written every block by ParameterInterface.
+    std::atomic<bool>  is_recording    { false };
+    std::atomic<float> record_progress { 0.f };
 };
 
 /** GUI → audio mailbox. Written by the GUI thread (typically from
@@ -107,6 +115,42 @@ struct GuiInputData
     // Layer-view radio: false ⇒ voice view (voice buttons select voices),
     // true ⇒ layer view (voice buttons select layers).
     std::atomic<bool> layer_view { false };
+
+    // Recording control edges. The GUI writes these on REC / STOP / ERASE
+    // touch; ParameterInterface consumes them as one-shot edges and clears
+    // them at the start of the next block so the GUI doesn't have to manage
+    // edge state. The selected layer at the moment of the edge is the target.
+    std::atomic<bool> record_start_request { false };
+    std::atomic<bool> record_stop_request  { false };
+    std::atomic<bool> erase_request        { false };
+
+    // --- Touch trigger queue (single-producer / single-consumer ring) ---
+    // The Android touch UI pushes one entry per tap on the waveform. The
+    // audio thread drains the queue at the top of each block, converting
+    // entries into ParameterData::touch_events that the Instrument launches
+    // as voices. write_idx is bumped by the GUI thread, read_idx by the audio
+    // thread; both are atomic so the indices serialize access to entries.
+    struct PendingTouchEvent
+    {
+        float start_fraction { 0.f };
+        float level          { 1.f };
+        int   target_layer   { 0 };
+    };
+    static constexpr size_t touch_event_queue_size = 16;
+    std::array<PendingTouchEvent, touch_event_queue_size> touch_event_queue {};
+    std::atomic<uint32_t> touch_event_write_idx { 0 };
+    std::atomic<uint32_t> touch_event_read_idx  { 0 };
+
+    // --- Touch scrub state ---
+    // While a finger drags an existing playhead, the GUI sets these so the
+    // audio thread can route a per-voice scrub. -1 means "no scrub in
+    // progress"; otherwise voice_scrub_slot is the voice slot being dragged,
+    // voice_scrub_position is the desired loop fraction [0, 1], and
+    // voice_scrub_level is the desired level [0, 1]. The scrub follows the
+    // existing Voice-mode scrub path inside Instrument.
+    std::atomic<int>   voice_scrub_slot     { -1 };
+    std::atomic<float> voice_scrub_position { 0.f };
+    std::atomic<float> voice_scrub_level    { 1.f };
 };
 
 #endif

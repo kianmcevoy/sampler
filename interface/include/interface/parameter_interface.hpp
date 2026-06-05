@@ -48,6 +48,38 @@ class ParameterInterface
         void publish_waveform(const SampleBuffer& target, GuiOutputData& gui,
                               float start_slider, float length_slider);
 
+        // --- Recording ---
+        // Arm a 10-second capture into layer_buffers[target_layer]. Zeros the
+        // target buffer, kills any voices currently playing on it, and seeds
+        // recording state. The next blocks will copy `audio` into the buffer
+        // until the 10 s ceiling is hit or stop_recording() is called.
+        void start_recording(int target_layer, float sample_rate,
+                             std::array<SampleBuffer, max_layers>& layer_buffers,
+                             ParameterData& p);
+
+        // End an active capture: re-run onset detection on the new contents,
+        // republish the waveform if the recorded layer is the displayed one,
+        // and clear recording state. Safe to call when no capture is active.
+        void stop_recording(std::array<SampleBuffer, max_layers>& layer_buffers,
+                            GuiOutputData& gui,
+                            float start_slider, float length_slider);
+
+        // Per-block capture step. While recording_layer_ >= 0, copy this
+        // block's input audio into recording_layer_'s SampleBuffer (both
+        // loaded_sample and the LagrangeDelay playback pair), advancing
+        // recording_sample_pos_. Auto-stops at max_record_samples_.
+        void process_recording(const PolyDspBuffer& audio,
+                               std::array<SampleBuffer, max_layers>& layer_buffers,
+                               GuiOutputData& gui,
+                               float start_slider, float length_slider);
+
+        // Zero a layer's SampleBuffer (both display + playback pair),
+        // clear its transient cache, and republish if it's the displayed
+        // layer. Used by the ERASE trigger.
+        void erase_layer_buffer(int layer_index,
+                                std::array<SampleBuffer, max_layers>& layer_buffers,
+                                GuiOutputData& gui);
+
         // --- MIDI ---
         struct ActiveNote
         {
@@ -89,6 +121,23 @@ class ParameterInterface
 
         // Per-block parse buffer. 256 messages is well over a typical block.
         imidi::MessageQueueStatic<256> midi_queue_ {};
+
+        // --- Recording state ---
+        // -1 ⇒ idle. 0..max_layers-1 ⇒ capturing into that layer's SampleBuffer.
+        int recording_layer_ { -1 };
+
+        // Sample-count progress into the recording buffer (per-channel; mono +
+        // stereo write the same number of samples per block). Reset to 0 on
+        // start_recording, hits max_record_samples_ at the auto-stop ceiling.
+        int recording_sample_pos_ { 0 };
+
+        // 10 seconds at the current sample rate. Established in prepare()
+        // via the first start_recording, cached for fast comparisons.
+        int max_record_samples_ { 480000 }; // safe default ≈ 10 s @ 48 kHz
+
+        // Cached sample rate for converting "10 seconds" into a sample ceiling.
+        // Updated each block from input.audio's expectations.
+        float sample_rate_ { 48000.f };
 };
 
 #endif

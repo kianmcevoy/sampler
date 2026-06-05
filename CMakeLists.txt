@@ -62,9 +62,24 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(PLATFORM_IS_LINUX 1)
     message(STATUS "Configuring for Linux")
 endif()
+set(PLATFORM_IS_ANDROID 0)
+if (CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(PLATFORM_IS_ANDROID 1)
+    message(STATUS "Configuring for Android (ABI: ${ANDROID_ABI}, API: ${CMAKE_SYSTEM_VERSION})")
+    # Android target lives under /home/kian/instruo/sampler/android/, driven
+    # by Gradle which invokes this CMakeLists via externalNativeBuild.
+endif()
 
 set(TARGET_NAME ${PROJECT_NAME})
 string(REPLACE " " "" EXECUTABLE_NAME_STRIPPED ${EXECUTABLE_NAME})
+
+if (${PLATFORM_IS_ANDROID})
+    # Android can only produce a Standalone (SHARED .so packaged in an APK
+    # by Gradle). VST3 / AU are out of scope for the Android port.
+    set(SAMPLER_FORMATS Standalone)
+else()
+    set(SAMPLER_FORMATS VST3 Standalone)
+endif()
 
 juce_add_plugin(${TARGET_NAME}
     PRODUCT_NAME "${EXECUTABLE_NAME}"
@@ -72,7 +87,7 @@ juce_add_plugin(${TARGET_NAME}
     BUNDLE_ID "com.Instruo.${EXECUTABLE_NAME_STRIPPED}"
     BACKGROUND_AUDIO_ENABLED TRUE
     # ICON_BIG "${PROJECT_SOURCE_DIR}/gui/assets/branding/${EXECUTABLE_NAME} icon.png"
-    FORMATS VST3 Standalone
+    FORMATS ${SAMPLER_FORMATS}
     PLUGIN_MANUFACTURER_CODE Inst # change this
     PLUGIN_CODE Prot # "PROTotyper"
     DESCRIPTION "JUCE-based prototyping framework for Instruo DSP projects"
@@ -83,6 +98,44 @@ juce_add_plugin(${TARGET_NAME}
 
 set(APP_TARGET ${TARGET_NAME}_Standalone)
 set(VST3_TARGET ${TARGET_NAME}_VST3)
+
+# On Android the Standalone target is a SHARED library loaded by Java via
+# `System.loadLibrary("juce_jni")` (see Java.java in juce_core). Override
+# the output name so the resulting .so matches JUCE's hardcoded load name.
+#
+# Also force default symbol visibility on the Standalone target so the
+# `juce_CreateApplication` extern "C" entry point declared by JUCE's
+# Standalone plugin client is exported from the .so. JUCE's Android event
+# bootstrap (juce_juceEventsAndroidStartApp in juce_Messaging_android.cpp)
+# does a runtime `dlsym("juce_CreateApplication")` on the loaded .so; with
+# JUCE's default -fvisibility=hidden the symbol is hidden and the lookup
+# silently returns null — so the app process starts but the JUCE main
+# window is never constructed, presenting a blank screen.
+if (${PLATFORM_IS_ANDROID})
+    set_target_properties(${APP_TARGET} PROPERTIES OUTPUT_NAME "juce_jni")
+    # Force `juce_CreateApplication` to be exported despite JUCE's per-source
+    # -fvisibility=hidden. JUCE's Android event bootstrap
+    # (juce_juceEventsAndroidStartApp in juce_Messaging_android.cpp) does a
+    # runtime `dlsym("juce_CreateApplication")` on the .so; if the symbol is
+    # hidden, the lookup returns null and the JUCE app never starts. We tell
+    # JUCE to skip its built-in definition (JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP)
+    # and provide our own in system/src/android_create_application.cpp with
+    # an explicit `__attribute__((visibility("default")))`.
+    #
+    # The macro must be defined on BOTH the shared-code target (where our
+    # replacement lives) and the Standalone wrapper target (where the JUCE
+    # module file lives) so JUCE skips its own definition in both compilation
+    # units and we don't end up with a duplicate symbol.
+    target_compile_definitions(${TARGET_NAME} PUBLIC
+        JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
+    # The replacement lives in the shared-code static archive; the linker
+    # would drop it via dead-code elimination because nothing inside the
+    # Standalone wrapper references it directly. `--undefined` (a.k.a.
+    # `-u`) tells the linker to treat the symbol as if it were used, which
+    # pulls the .o out of the archive into the final .so.
+    target_link_options(${APP_TARGET} PRIVATE
+        "LINKER:--undefined=juce_CreateApplication")
+endif()
 
 file(GLOB TARGET_SRCS
     ${SYSTEM_DIR}/src/*.cpp
@@ -112,6 +165,20 @@ target_compile_definitions(${TARGET_NAME}
     SOFTWARE_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     SOFTWARE_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
+
+if (${PLATFORM_IS_ANDROID})
+    # JUCE's JNI bindings for the Android Activity lifecycle (appOnResume,
+    # appNewIntent) live behind JUCE_PUSH_NOTIFICATIONS_ACTIVITY. Without
+    # this define the C++ side never registers the native methods declared
+    # in com.rmsl.juce.JuceActivity, and the app crashes on first resume
+    # with UnsatisfiedLinkError. The class path here mirrors the value used
+    # in JUCE's AudioPluginHost example.
+    target_compile_definitions(${TARGET_NAME}
+        PUBLIC
+            JUCE_PUSH_NOTIFICATIONS=1
+            JUCE_PUSH_NOTIFICATIONS_ACTIVITY="com/rmsl/juce/JuceActivity"
+    )
+endif()
 juce_generate_juce_header(${TARGET_NAME})
 
 set(PROJECT_VERSION_STRING "v${PROJECT_VERSION}")
@@ -176,43 +243,45 @@ if (${PLATFORM_IS_WINDOWS} OR ${PLATFORM_IS_LINUX})
     )
 endif()
 
-set(VST3_RESOURCES_PATH "${VST3_CONTENTS_PATH}/Resources")
-set(APP_RESOURCES_PATH "${APP_CONTENTS_PATH}/Resources")
-add_custom_command(TARGET ${VST3_TARGET} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_RESOURCES_PATH}"
-)
-add_custom_command(TARGET ${APP_TARGET} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${APP_RESOURCES_PATH}"
-)
-
-set(VST3_GUI_RESOURCES_PATH "${VST3_RESOURCES_PATH}/gui")
-set(APP_GUI_RESOURCES_PATH "${APP_RESOURCES_PATH}/gui")
-add_custom_command(TARGET ${VST3_TARGET} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_GUI_RESOURCES_PATH}"
-)
-add_custom_command(TARGET ${APP_TARGET} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${APP_GUI_RESOURCES_PATH}"
-)
-
-set(RESOURCES_TO_COPY
-    "gui/assets"
-    "gui/fonts"
-)
-foreach(resource ${RESOURCES_TO_COPY})
+if (NOT ${PLATFORM_IS_ANDROID})
+    set(VST3_RESOURCES_PATH "${VST3_CONTENTS_PATH}/Resources")
+    set(APP_RESOURCES_PATH "${APP_CONTENTS_PATH}/Resources")
     add_custom_command(TARGET ${VST3_TARGET} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_RESOURCES_PATH}/${resource}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_RESOURCES_PATH}"
     )
     add_custom_command(TARGET ${APP_TARGET} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${APP_RESOURCES_PATH}/${resource}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${APP_RESOURCES_PATH}"
     )
 
+    set(VST3_GUI_RESOURCES_PATH "${VST3_RESOURCES_PATH}/gui")
+    set(APP_GUI_RESOURCES_PATH "${APP_RESOURCES_PATH}/gui")
     add_custom_command(TARGET ${VST3_TARGET} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/${resource}" "${VST3_RESOURCES_PATH}/${resource}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_GUI_RESOURCES_PATH}"
     )
     add_custom_command(TARGET ${APP_TARGET} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/${resource}" "${APP_RESOURCES_PATH}/${resource}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${APP_GUI_RESOURCES_PATH}"
     )
-endforeach()
+
+    set(RESOURCES_TO_COPY
+        "gui/assets"
+        "gui/fonts"
+    )
+    foreach(resource ${RESOURCES_TO_COPY})
+        add_custom_command(TARGET ${VST3_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${VST3_RESOURCES_PATH}/${resource}"
+        )
+        add_custom_command(TARGET ${APP_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${APP_RESOURCES_PATH}/${resource}"
+        )
+
+        add_custom_command(TARGET ${VST3_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/${resource}" "${VST3_RESOURCES_PATH}/${resource}"
+        )
+        add_custom_command(TARGET ${APP_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_SOURCE_DIR}/${resource}" "${APP_RESOURCES_PATH}/${resource}"
+        )
+    endforeach()
+endif()
 
 # Links to all necessary dependencies. The present ones are recommended by JUCE.
 # If you use one of the additional modules, like the DSP module, you need to specify it here.

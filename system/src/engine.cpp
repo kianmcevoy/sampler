@@ -275,6 +275,8 @@ void EngineAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             .state = this->state_data,
 			.gui = this->gui_input_data,
 			.midi = midiMessages,
+			.audio = this->audio_data.input,
+			.sample_rate = static_cast<float>(this->getSampleRate()),
         };
         ParameterInterfaceOutputData output
         {

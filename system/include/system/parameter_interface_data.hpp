@@ -6,6 +6,7 @@
 #include "interface/utility_data.hpp"
 #include "system/gui_control_data.hpp"
 #include "system/osc_control_data.hpp"
+#include "system/buffer.hpp"
 #include "interface/gui_data.hpp"
 #include "instrument/audio_data.hpp"
 #include "instrument/constants.hpp"
@@ -26,8 +27,19 @@ struct ParameterInterfaceInputData
     const GuiControlData& controls;
     const OscInputData& osc;
     const StateData& state;
-	const GuiInputData& gui;
+	// Non-const because ParameterInterface clears one-shot edge atomics
+	// (record_start_request / record_stop_request / erase_request) here so
+	// the GUI thread doesn't have to manage edge state. All access still
+	// goes through std::atomic, preserving the existing thread protocol.
+	GuiInputData& gui;
 	const juce::MidiBuffer& midi;
+	// Block-aligned input audio (mono or stereo). Same buffer that's been
+	// copied out of JUCE's audio buffer by EngineAudioProcessor::processBlock.
+	// Used by the recording path to capture into a layer's SampleBuffer.
+	const PolyDspBuffer& audio;
+	// Current host sample rate. Needed by the recording path to translate
+	// "10 seconds" into a sample-count ceiling. Set by EngineAudioProcessor.
+	float sample_rate { 48000.f };
 };
 
 /** Data structure given to ParameterInterface::process, ::load, and constructor

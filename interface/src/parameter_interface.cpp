@@ -31,9 +31,48 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input,
 {
     auto& p = output.parameter;
 
+    // Cache sample rate so recording can translate "10 s" into samples.
+    this->sample_rate_ = input.sample_rate;
+    this->max_record_samples_ = static_cast<int>(input.sample_rate * 10.f);
+
     // Parse MIDI first so velocity/pitch reads use the current slider values
     // captured *before* any modwheel-driven start offset is applied below.
     this->process_midi(input.midi, input.controls, p);
+
+    // Desktop record triggers feed the same gui_in edge atomics as the Android
+    // touch buttons. Triggers only read `true` for the one block following a
+    // click, so a single ORed write each block is safe.
+    if (input.controls.triggers.at("record"))
+        input.gui.record_start_request.store(true);
+    if (input.controls.triggers.at("stop_record"))
+        input.gui.record_stop_request.store(true);
+    if (input.controls.triggers.at("erase_layer"))
+        input.gui.erase_request.store(true);
+
+    // Drain the GUI touch-event queue into ParameterData. Single-producer
+    // (GUI) / single-consumer (audio) ring; entries between read_idx and
+    // write_idx are well-defined snapshots. Capped at the per-block max
+    // so a finger-storm can't exhaust the parameter array.
+    p.touch_event_count = 0;
+    {
+        const auto write_idx = input.gui.touch_event_write_idx.load(std::memory_order_acquire);
+        auto       read_idx  = input.gui.touch_event_read_idx .load(std::memory_order_relaxed);
+        while (read_idx != write_idx
+            && p.touch_event_count < ParameterData::max_touch_events_per_block)
+        {
+            const auto& ev = input.gui.touch_event_queue[read_idx % GuiInputData::touch_event_queue_size];
+            p.touch_events[p.touch_event_count++] = ParameterData::TouchTriggerEvent {
+                /*start_fraction=*/ev.start_fraction,
+                /*level=*/ev.level,
+                /*target_layer=*/ev.target_layer,
+            };
+            ++read_idx;
+        }
+        // Skip any overflow we don't have room for in p.touch_events this
+        // block — drop them rather than block. read_idx catches up to
+        // write_idx so the queue doesn't permanently back up.
+        input.gui.touch_event_read_idx.store(write_idx, std::memory_order_release);
+    }
 
     // Sliders return values already in their displayed ranges (configured in
     // gui/src/controls.cpp), so no rescaling is needed here.
@@ -101,6 +140,12 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input,
     p.selected_voice     = input.gui.selected_voice.load();
     p.global_mode        = input.gui.global_mode.load();
     p.position_scrubbing = input.gui.position_scrubbing.load();
+
+    // Touch scrub state — independent of the position-slider scrub. Read once
+    // per block; instrument routes if slot is in range.
+    p.touch_scrub_slot     = input.gui.voice_scrub_slot.load();
+    p.touch_scrub_position = input.gui.voice_scrub_position.load();
+    p.touch_scrub_level    = input.gui.voice_scrub_level.load();
 
     // Layer routing. selected_layer chooses which buffer marker/snap reads
     // see, where new triggers land, and which waveform the GUI displays.
@@ -250,6 +295,53 @@ void ParameterInterface::process(const ParameterInterfaceInputData& input,
         // Always acknowledge the handshake — GUI clears file_path_ready on this.
         output.gui.file_loaded.store(true);
     }
+
+    // --- Recording handshake. Edges from the GUI come in via atomics; consume
+    //     them as one-shot events (clear the atomic so the GUI doesn't need to
+    //     manage edge state). Order: erase first (so an erase+record combo
+    //     starts from a known-empty buffer), then start, then stop.
+    GuiInputData& gui_in = input.gui;
+
+    if (gui_in.erase_request.exchange(false))
+    {
+        this->erase_layer_buffer(p.current_layer, output.layer_buffers, output.gui);
+    }
+
+    if (gui_in.record_start_request.exchange(false))
+    {
+        // If a record is already in progress on some other layer, stop it
+        // cleanly before starting the new one. This keeps the "only one
+        // record at a time" invariant simple.
+        if (this->recording_layer_ >= 0
+            && this->recording_layer_ != p.current_layer)
+        {
+            this->stop_recording(output.layer_buffers, output.gui,
+                                 input.controls.sliders.at("start"),
+                                 input.controls.sliders.at("length"));
+        }
+        this->start_recording(p.current_layer, input.sample_rate,
+                              output.layer_buffers, p);
+    }
+
+    if (gui_in.record_stop_request.exchange(false))
+    {
+        this->stop_recording(output.layer_buffers, output.gui,
+                             input.controls.sliders.at("start"),
+                             input.controls.sliders.at("length"));
+    }
+
+    // Per-block capture step. While idle this is a fast no-op.
+    this->process_recording(input.audio, output.layer_buffers, output.gui,
+                            input.controls.sliders.at("start"),
+                            input.controls.sliders.at("length"));
+
+    // Publish recording state to the GUI mailbox each block.
+    output.gui.is_recording.store(this->recording_layer_ >= 0);
+    output.gui.record_progress.store(
+        this->max_record_samples_ > 0
+            ? static_cast<float>(this->recording_sample_pos_)
+                / static_cast<float>(this->max_record_samples_)
+            : 0.f);
 }
 
 bool ParameterInterface::load_sample_into_buffer(const juce::File& audio_file,
@@ -467,4 +559,157 @@ int ParameterInterface::allocate_midi_voice_slot(bool voice_stealing)
     // referred to is already gone). Pick slot 0 for determinism.
     if (voice_stealing) return 0;
     return -1;
+}
+
+// === Recording ==============================================================
+
+void ParameterInterface::start_recording(int target_layer, float sample_rate,
+                                         std::array<SampleBuffer, max_layers>& layer_buffers,
+                                         ParameterData& p)
+{
+    if (target_layer < 0 || target_layer >= static_cast<int>(max_layers)) return;
+
+    this->sample_rate_        = sample_rate;
+    this->max_record_samples_ = static_cast<int>(sample_rate * 10.f);
+    // LagrangeDelay capacity is 524288 samples — cap so we never overrun.
+    constexpr int playback_buffer_capacity = 524288;
+    if (this->max_record_samples_ > playback_buffer_capacity)
+        this->max_record_samples_ = playback_buffer_capacity;
+
+    auto& target = layer_buffers[target_layer];
+    target.loaded_sample.resize(this->max_record_samples_);
+    target.loaded_sample.fill(0.f);
+    target.sample[0].reset();
+    target.sample[1].reset();
+    target.transient_count    = 0;
+    target.loaded_sample_rate = sample_rate;
+
+    this->recording_layer_      = target_layer;
+    this->recording_sample_pos_ = 0;
+
+    // Kill any voices currently playing on the target layer. Since recording
+    // happens on the currently-selected layer (GUI invariant), setting p.stop
+    // for this block routes through Instrument's per-layer kill path. Voices
+    // on other layers are untouched.
+    p.stop = true;
+}
+
+void ParameterInterface::stop_recording(std::array<SampleBuffer, max_layers>& layer_buffers,
+                                        GuiOutputData& gui,
+                                        float start_slider, float length_slider)
+{
+    if (this->recording_layer_ < 0) return;
+
+    auto& target = layer_buffers[this->recording_layer_];
+    const int captured = this->recording_sample_pos_;
+
+    // Replay the captured display buffer into the playback delay lines so
+    // future voice launches can read interpolated audio at any position.
+    // (LagrangeDelay only exposes append-style write, matching the loader.)
+    target.sample[0].reset();
+    target.sample[1].reset();
+    for (int i = 0; i < captured; ++i)
+    {
+        target.sample[0].write(target.loaded_sample.channel(0)[i]);
+        target.sample[1].write(target.loaded_sample.channel(1)[i]);
+    }
+
+    // If the captured length is short of the 10 s ceiling, shrink the display
+    // buffer so the waveform view matches what was actually recorded.
+    if (captured < static_cast<int>(target.loaded_sample.channel(0).size()))
+    {
+        target.loaded_sample.resize(captured);
+        target.loaded_sample.update();
+    }
+
+    // Re-detect onsets on the new contents (matches load_sample_into_buffer
+    // post-processing). Skip when captured is 0 — avoids dividing by length.
+    if (captured > 0)
+    {
+        std::vector<float> mono(static_cast<size_t>(captured));
+        for (int i = 0; i < captured; ++i)
+        {
+            mono[static_cast<size_t>(i)] = 0.5f * (target.loaded_sample.channel(0)[i]
+                                                 + target.loaded_sample.channel(1)[i]);
+        }
+        const auto onsets = idsp::detect_onsets(
+            mono.data(), static_cast<size_t>(captured), this->sample_rate_);
+        target.transient_indices = onsets.indices;
+        target.transient_count   = onsets.count;
+    }
+    else
+    {
+        target.transient_count = 0;
+    }
+
+    // Republish the waveform if the recorded layer is the displayed layer.
+    if (this->recording_layer_ == this->last_published_layer_)
+    {
+        this->publish_waveform(target, gui, start_slider, length_slider);
+    }
+
+    this->recording_layer_      = -1;
+    this->recording_sample_pos_ = 0;
+}
+
+void ParameterInterface::process_recording(const PolyDspBuffer& audio,
+                                           std::array<SampleBuffer, max_layers>& layer_buffers,
+                                           GuiOutputData& gui,
+                                           float start_slider, float length_slider)
+{
+    if (this->recording_layer_ < 0) return;
+
+    auto& target = layer_buffers[this->recording_layer_];
+    const int block_size = static_cast<int>(audio.channel(0).size());
+    const int room       = this->max_record_samples_ - this->recording_sample_pos_;
+    const int to_write   = idsp::min(block_size, room);
+
+    // PolyDspBuffer is always 2-channel (template Nc=2); engine.cpp populates
+    // both channels even when the host runs mono in. If a future Android engine
+    // path leaves channel(1) empty, the read still returns a zeroed float.
+    for (int i = 0; i < to_write; ++i)
+    {
+        const int dst = this->recording_sample_pos_ + i;
+        target.loaded_sample.channel(0)[dst] = audio.channel(0)[i];
+        target.loaded_sample.channel(1)[dst] = audio.channel(1)[i];
+    }
+    this->recording_sample_pos_ += to_write;
+
+    // Auto-stop when the 10 s ceiling is reached.
+    if (this->recording_sample_pos_ >= this->max_record_samples_)
+    {
+        this->stop_recording(layer_buffers, gui, start_slider, length_slider);
+    }
+}
+
+void ParameterInterface::erase_layer_buffer(int layer_index,
+                                            std::array<SampleBuffer, max_layers>& layer_buffers,
+                                            GuiOutputData& gui)
+{
+    if (layer_index < 0 || layer_index >= static_cast<int>(max_layers)) return;
+
+    // Cancel any in-progress recording into this layer — erase wins.
+    if (this->recording_layer_ == layer_index)
+    {
+        this->recording_layer_      = -1;
+        this->recording_sample_pos_ = 0;
+    }
+
+    auto& target = layer_buffers[layer_index];
+    target.loaded_sample.resize(0);
+    target.loaded_sample.update();
+    target.sample[0].reset();
+    target.sample[1].reset();
+    target.transient_count = 0;
+
+    // If this is the displayed layer, clear the waveform view.
+    if (layer_index == this->last_published_layer_)
+    {
+        gui.waveform_ready.store(false);
+        gui.waveform_left.clear();
+        gui.waveform_right.clear();
+        gui.display_marker_start.store(0);
+        gui.display_marker_end.store(0);
+        gui.marker_count.store(0);
+    }
 }

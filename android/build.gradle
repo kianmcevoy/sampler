@@ -1,0 +1,8 @@
+// Root build script for the Instruo Sampler Android target.
+// The actual application code is in the :app submodule, which delegates
+// the native C++ build to the project root's CMakeLists.txt via
+// externalNativeBuild { cmake { ... } }.
+
+plugins {
+    id 'com.android.application' version '8.4.0' apply false
+}

@@ -261,6 +261,32 @@ struct ParameterData
     // max_midi_events_per_block are dropped at the source.
     std::array<MidiNoteEvent, max_midi_events_per_block> midi_events {};
     size_t midi_event_count { 0 };
+
+    // Per-block touch-trigger events. Each entry launches a voice at a
+    // specific (start, level) and layer, without disturbing the slider state
+    // or the per-launch random anchor. Used by the Android touch UI when the
+    // user taps the waveform: every concurrent finger produces one event per
+    // block. Capped to max_voices because that's the upper bound on voices
+    // that could actually be allocated this block anyway.
+    static constexpr size_t max_touch_events_per_block = max_voices;
+    struct TouchTriggerEvent
+    {
+        float start_fraction;   // [0, 1] of buffer
+        float level;            // [0, 1]
+        int   target_layer;     // 0..max_layers-1
+    };
+    std::array<TouchTriggerEvent, max_touch_events_per_block> touch_events {};
+    size_t touch_event_count { 0 };
+
+    // Per-voice touch scrub. -1 ⇒ no scrub in progress. Otherwise the named
+    // slot's loop position teleports to `touch_scrub_position` and its
+    // effective live `level` is overridden by `touch_scrub_level`, regardless
+    // of the Voice/Global mode mux. Used by the Android touch UI's
+    // touch-and-drag-on-a-playhead gesture. Single-voice scope (newest
+    // grab wins) — see TouchWaveformView for the GUI side.
+    int   touch_scrub_slot     { -1 };
+    float touch_scrub_position { 0.f };
+    float touch_scrub_level    { 1.f };
 };
 
 #endif

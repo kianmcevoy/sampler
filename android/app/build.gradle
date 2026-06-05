@@ -1,0 +1,82 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.instruo.sampler'
+    compileSdk 36
+    ndkVersion '30.0.14904198'
+
+    defaultConfig {
+        applicationId 'com.instruo.sampler'
+        // Bumped to 29 (Android 10) — required by JUCE 8's AFontMatcher API
+        // calls in juce_graphics. Lower minSdk would need a JUCE patch.
+        // API 29 still covers ~98% of devices in 2026; net loss is negligible.
+        minSdkVersion    29
+        targetSdkVersion 36
+        versionCode 1
+        versionName '0.1.0'
+
+        // ABIs to build. armeabi-v7a + arm64-v8a cover real Android devices;
+        // x86_64 is for the emulator. arm64 is the dominant device ABI in 2026.
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64'
+        }
+
+        externalNativeBuild {
+            cmake {
+                // JUCE + the project DSP build through the root CMakeLists.txt.
+                // We pass C++23 + dependent platform args. The Oboe shim used
+                // by juce_audio_devices auto-links into the produced .so.
+                arguments(
+                    '-DANDROID_TOOLCHAIN=clang',
+                    '-DANDROID_STL=c++_shared',
+                    '-DANDROID_CPP_FEATURES=exceptions rtti',
+                    '-DCMAKE_BUILD_TYPE=Debug',
+                )
+                cppFlags '-std=c++23'
+                // Compile only the Standalone target — VST3 isn't built on Android.
+                targets 'sampler_Standalone'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            // Path is relative to this build.gradle (i.e. android/app/).
+            // The project root CMakeLists.txt sits two directories up.
+            path '../../CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable    true
+            jniDebuggable true
+        }
+        release {
+            minifyEnabled false
+        }
+    }
+
+    // Java source roots are JUCE's bundled Java helpers — JuceActivity,
+    // JuceApp, Oboe MIDI support, ContentProvider plumbing. These compile
+    // into the APK and are referenced from AndroidManifest.xml.
+    sourceSets {
+        main {
+            manifest.srcFile 'src/main/AndroidManifest.xml'
+            java.srcDirs += [
+                '../../system/JUCE/modules/juce_core/native/javacore/init',
+                '../../system/JUCE/modules/juce_core/native/javacore/app',
+                '../../system/JUCE/modules/juce_core/native/java/app',
+                '../../system/JUCE/modules/juce_audio_devices/native/java/app',
+                '../../system/JUCE/modules/juce_gui_basics/native/java/app',
+                '../../system/JUCE/modules/juce_gui_basics/native/javaopt/app',
+            ]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

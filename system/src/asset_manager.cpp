@@ -7,6 +7,14 @@ juce::String AssetManager::get_real_resource_path(const juce::String& resource_p
 
 juce::File AssetManager::get_resource_file(const juce::String& resource_path)
 {
+#if JUCE_ANDROID
+    // On Android, assets are packaged into the APK and accessed via JUCE's
+    // `commonApplicationDataDirectory`, which on Android resolves to the app
+    // assets path. JUCE callers should treat the returned File as read-only;
+    // its existsAsFile() / etc behave as on a normal filesystem.
+    const auto base = juce::File::getSpecialLocation(juce::File::SpecialLocationType::commonApplicationDataDirectory);
+    return base.getChildFile(resource_path);
+#else
     const auto exe_file = juce::File::getSpecialLocation(juce::File::SpecialLocationType::currentExecutableFile);
     const auto asset_file = exe_file
         .getParentDirectory()
@@ -14,6 +22,7 @@ juce::File AssetManager::get_resource_file(const juce::String& resource_path)
         .getChildFile("Resources")
         .getChildFile(resource_path);
     return asset_file;
+#endif
 }
 
 juce::File AssetManager::get_user_file(const juce::String& product_name, const juce::String& user_path)
